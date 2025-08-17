@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace ConsoleRayTracing
+namespace ConsoleGame.RayTracing
 {
     public struct Vec3
     {

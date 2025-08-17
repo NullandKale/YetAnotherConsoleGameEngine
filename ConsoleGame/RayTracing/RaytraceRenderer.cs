@@ -1,9 +1,11 @@
-﻿using ConsoleGame.Renderer;
+﻿using ConsoleGame.RayTracing.Scenes;
+using ConsoleGame.Renderer;
+using ConsoleRayTracing;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ConsoleRayTracing
+namespace ConsoleGame.RayTracing
 {
     public sealed class RaytraceRenderer
     {
@@ -37,23 +39,49 @@ namespace ConsoleRayTracing
         private const float MirrorThreshold = 0.9f;
         private const float Eps = 1e-4f;
 
+        // Anti-sparkle / convergence helpers
+        private const float MaxLuminance = 1.0f;           // clamp radiance before TAA to kill fireflies without over-darkening
+        private const float PaletteHysteresis = 0.02f;     // sRGB distance threshold to keep prior console color
+        private const ulong SeedSalt = 0x9E3779B97F4A7C15UL;
+
         private readonly TaaAccumulator taa;
+
+        // Local 16-color palette for hysteresis distance (sRGB [0,1])
+        private static readonly Vec3[] Palette16 = new Vec3[]
+        {
+            new Vec3(0.00f,0.00f,0.00f),  // Black
+            new Vec3(0.00f,0.00f,0.50f),  // DarkBlue
+            new Vec3(0.00f,0.50f,0.00f),  // DarkGreen
+            new Vec3(0.00f,0.50f,0.50f),  // DarkCyan
+            new Vec3(0.50f,0.00f,0.00f),  // DarkRed
+            new Vec3(0.50f,0.00f,0.50f),  // DarkMagenta
+            new Vec3(0.50f,0.50f,0.00f),  // DarkYellow
+            new Vec3(0.75f,0.75f,0.75f),  // Gray
+            new Vec3(0.50f,0.50f,0.50f),  // DarkGray
+            new Vec3(0.00f,0.00f,1.00f),  // Blue
+            new Vec3(0.00f,1.00f,0.00f),  // Green
+            new Vec3(0.00f,1.00f,1.00f),  // Cyan
+            new Vec3(1.00f,0.00f,0.00f),  // Red
+            new Vec3(1.00f,0.00f,1.00f),  // Magenta
+            new Vec3(1.00f,1.00f,0.00f),  // Yellow
+            new Vec3(1.00f,1.00f,1.00f)   // White
+        };
 
         public RaytraceRenderer(Framebuffer framebuffer, Scene scene, float fovDeg, int pxW, int pxH, int superSample)
         {
             this.scene = scene;
             this.fovDeg = fovDeg;
-            this.hiW = pxW;
-            this.hiH = pxH;
-            this.ss = Math.Max(1, superSample);
+            hiW = pxW;
+            hiH = pxH;
+            ss = Math.Max(1, superSample);
 
-            this.fbW = framebuffer.Width;
-            this.fbH = framebuffer.Height;
+            fbW = framebuffer.Width;
+            fbH = framebuffer.Height;
 
             buffers[0] = new Chexel[fbW, fbH];
             buffers[1] = new Chexel[fbW, fbH];
 
-            taa = new TaaAccumulator(true, fbW, fbH, ss, 0.52f);
+            taa = new TaaAccumulator(true, fbW, fbH, ss, 0.05f);
 
             scene.RebuildBVH();
 
@@ -67,7 +95,7 @@ namespace ConsoleRayTracing
         {
             lock (camLock)
             {
-                this.camPos = pos;
+                camPos = pos;
                 this.yaw = yaw;
                 this.pitch = pitch;
                 taa.NotifyCamera(pos.X, pos.Y, pos.Z, yaw, pitch);
@@ -106,7 +134,7 @@ namespace ConsoleRayTracing
             {
                 while (runRenderLoop)
                 {
-                    float aspect = (float)hiW / (float)hiH;
+                    float aspect = hiW / (float)hiH;
 
                     Vec3 camPosSnapshot;
                     float yawSnapshot;
@@ -124,15 +152,15 @@ namespace ConsoleRayTracing
                     long frame = Interlocked.Increment(ref frameCounter);
 
                     Chexel[,] target = buffers[backIndex];
+                    Chexel[,] prev = buffers[frontIndex];
 
                     int jx, jy;
                     taa.GetJitter(out jx, out jy);
 
                     Parallel.For(0, procCount, worker =>
                     {
-                        int yStart = (worker * fbH) / procCount;
-                        int yEnd = ((worker + 1) * fbH) / procCount;
-                        Rng rng = new Rng(unchecked(((ulong)Environment.TickCount << 32) ^ ((ulong)worker * 0x9E3779B97F4A7C15UL) ^ (ulong)frame));
+                        int yStart = worker * fbH / procCount;
+                        int yEnd = (worker + 1) * fbH / procCount;
 
                         for (int cy = yStart; cy < yEnd; cy++)
                         {
@@ -146,17 +174,20 @@ namespace ConsoleRayTracing
                                 Vec3 topSum = Vec3.Zero;
                                 Vec3 botSum = Vec3.Zero;
 
+                                // Per-frame, per-pixel seed so TAA can converge over changing samples
+                                Rng rng = new Rng(PerFrameSeed(cx, cy, frame, jx, jy));
+
                                 for (int syi = 0; syi < ss; syi++)
                                 {
-                                    int syTop = ss > 1 ? ((syi + jy) % ss) : syi;
+                                    int syTop = ss > 1 ? (syi + jy) % ss : syi;
                                     int yTopPx = yTopPx0 + syTop;
 
-                                    int syBot = ss > 1 ? ((syi + jy) % ss) : syi;
+                                    int syBot = ss > 1 ? (syi + jy) % ss : syi;
                                     int yBotPx = yBotPx0 + syBot;
 
                                     for (int sxi = 0; sxi < ss; sxi++)
                                     {
-                                        int sx = ss > 1 ? ((sxi + jx) % ss) : sxi;
+                                        int sx = ss > 1 ? (sxi + jx) % ss : sxi;
                                         int xPx = xPx0 + sx;
 
                                         Ray rTop = cam.MakeRay(xPx, yTopPx, hiW, hiH);
@@ -169,17 +200,26 @@ namespace ConsoleRayTracing
                                     }
                                 }
 
-                                float inv = 1.0f / (float)(ss * ss);
+                                float inv = 1.0f / (ss * ss);
                                 Vec3 topAvg = new Vec3(topSum.X * inv, topSum.Y * inv, topSum.Z * inv);
                                 Vec3 botAvg = new Vec3(botSum.X * inv, botSum.Y * inv, botSum.Z * inv);
 
+                                // Firefly clamp before temporal accumulation
+                                topAvg = ClampLuminance(topAvg, MaxLuminance);
+                                botAvg = ClampLuminance(botAvg, MaxLuminance);
+
                                 float outTopR, outTopG, outTopB, outBotR, outBotG, outBotB;
-                                taa.Accumulate(cx, cy, (float)topAvg.X, (float)topAvg.Y, (float)topAvg.Z, (float)botAvg.X, (float)botAvg.Y, (float)botAvg.Z, out outTopR, out outTopG, out outTopB, out outBotR, out outBotG, out outBotB);
+                                taa.Accumulate(cx, cy, topAvg.X, topAvg.Y, topAvg.Z, botAvg.X, botAvg.Y, botAvg.Z, out outTopR, out outTopG, out outTopB, out outBotR, out outBotG, out outBotB);
 
                                 Vec3 topSRGB = new Vec3(outTopR, outTopG, outTopB).Saturate();
                                 Vec3 botSRGB = new Vec3(outBotR, outBotG, outBotB).Saturate();
-                                ConsoleColor fg = ConsolePalette.NearestColor(topSRGB);
-                                ConsoleColor bg = ConsolePalette.NearestColor(botSRGB);
+
+                                ConsoleColor prevFg = prev[cx, cy].ForegroundColor;
+                                ConsoleColor prevBg = prev[cx, cy].BackgroundColor;
+
+                                ConsoleColor fg = NearestWithHysteresis(topSRGB, prevFg, PaletteHysteresis);
+                                ConsoleColor bg = NearestWithHysteresis(botSRGB, prevBg, PaletteHysteresis);
+
                                 target[cx, cy] = new Chexel('▀', fg, bg);
                             }
                         }
@@ -243,14 +283,14 @@ namespace ConsoleRayTracing
                 Vec3 reflDir = Reflect(r.Dir, rec.N).Normalized();
                 Ray reflRay = new Ray(rec.P + rec.N * Eps, reflDir);
                 Vec3 reflCol = Trace(scene, reflRay, depth + 1, ref rng);
-                color += new Vec3(reflCol.X * (float)rec.Mat.Albedo.X, reflCol.Y * (float)rec.Mat.Albedo.Y, reflCol.Z * (float)rec.Mat.Albedo.Z);
+                color += new Vec3(reflCol.X * rec.Mat.Albedo.X, reflCol.Y * rec.Mat.Albedo.Y, reflCol.Z * rec.Mat.Albedo.Z);
                 return color;
             }
 
             if (scene.Ambient.Intensity > 0.0f)
             {
                 Vec3 a = new Vec3(scene.Ambient.Color.X * scene.Ambient.Intensity, scene.Ambient.Color.Y * scene.Ambient.Intensity, scene.Ambient.Color.Z * scene.Ambient.Intensity);
-                color += new Vec3(a.X * (float)rec.Mat.Albedo.X, a.Y * (float)rec.Mat.Albedo.Y, a.Z * (float)rec.Mat.Albedo.Z);
+                color += new Vec3(a.X * rec.Mat.Albedo.X, a.Y * rec.Mat.Albedo.Y, a.Z * rec.Mat.Albedo.Z);
             }
 
             for (int i = 0; i < scene.Lights.Count; i++)
@@ -286,9 +326,9 @@ namespace ConsoleRayTracing
                     Vec3 bounceDir = CosineSampleHemisphere(rec.N, ref rng);
                     Ray bounce = new Ray(rec.P + rec.N * Eps, bounceDir);
                     Vec3 Li = Trace(scene, bounce, depth + 1, ref rng);
-                    indirect += new Vec3(Li.X * (float)rec.Mat.Albedo.X, Li.Y * (float)rec.Mat.Albedo.Y, Li.Z * (float)rec.Mat.Albedo.Z);
+                    indirect += new Vec3(Li.X * rec.Mat.Albedo.X, Li.Y * rec.Mat.Albedo.Y, Li.Z * rec.Mat.Albedo.Z);
                 }
-                float invSpp = 1.0f / (float)IndirectSamples;
+                float invSpp = 1.0f / IndirectSamples;
                 color += new Vec3(indirect.X * invSpp, indirect.Y * invSpp, indirect.Z * invSpp);
             }
 
@@ -322,6 +362,79 @@ namespace ConsoleRayTracing
         private static Vec3 Lerp(Vec3 a, Vec3 b, float t)
         {
             return a * (1.0f - t) + b * t;
+        }
+
+        private static ulong PerFrameSeed(int x, int y, long frame, int jx, int jy)
+        {
+            unchecked
+            {
+                ulong h = 1469598103934665603UL;
+                h ^= (ulong)(x) * 0x9E3779B97F4A7C15UL; h = SplitMix64(h);
+                h ^= (ulong)(y) * 0xC2B2AE3D27D4EB4FUL; h = SplitMix64(h);
+                h ^= (ulong)frame * 0x165667B19E3779F9UL; h = SplitMix64(h);
+                h ^= ((ulong)(byte)jx << 8) ^ (ulong)(byte)jy; h = SplitMix64(h);
+                h ^= SeedSalt; h = SplitMix64(h);
+                return h;
+            }
+        }
+
+        private static ulong SplitMix64(ulong z)
+        {
+            unchecked
+            {
+                z += 0x9E3779B97F4A7C15UL;
+                z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL;
+                z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL;
+                return z ^ (z >> 31);
+            }
+        }
+
+        private static Vec3 ClampLuminance(Vec3 c, float maxY)
+        {
+            float y = 0.2126f * c.X + 0.7152f * c.Y + 0.0722f * c.Z;
+            if (y <= maxY)
+            {
+                return c;
+            }
+            float s = maxY / MathF.Max(y, 1e-6f);
+            return new Vec3(c.X * s, c.Y * s, c.Z * s);
+        }
+
+        private static ConsoleColor NearestWithHysteresis(Vec3 srgb, ConsoleColor prev, float hysteresis)
+        {
+            ConsoleColor cand = ConsolePalette.NearestColor(srgb);
+            if (cand == prev)
+            {
+                return prev;
+            }
+            Vec3 prevRGB = FromConsole(prev);
+            Vec3 candRGB = FromConsole(cand);
+            float dPrev2 = Dist2(srgb, prevRGB);
+            float dCand2 = Dist2(srgb, candRGB);
+            float h2 = hysteresis * hysteresis;
+            if (dCand2 + h2 >= dPrev2)
+            {
+                return prev;
+            }
+            return cand;
+        }
+
+        private static Vec3 FromConsole(ConsoleColor c)
+        {
+            int idx = (int)c;
+            if (idx < 0 || idx >= Palette16.Length)
+            {
+                return Palette16[0];
+            }
+            return Palette16[idx];
+        }
+
+        private static float Dist2(Vec3 a, Vec3 b)
+        {
+            float dx = a.X - b.X;
+            float dy = a.Y - b.Y;
+            float dz = a.Z - b.Z;
+            return dx * dx + dy * dy + dz * dz;
         }
     }
 }

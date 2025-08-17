@@ -1,6 +1,8 @@
 ﻿// File: RaytraceRenderer.cs
 using ConsoleGame.Components;
 using ConsoleGame.Entities;
+using ConsoleGame.RayTracing;
+using ConsoleGame.RayTracing.Scenes;
 using ConsoleGame.Renderer;
 using System;
 using System.Collections.Generic;

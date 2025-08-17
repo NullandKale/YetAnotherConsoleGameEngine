@@ -1,8 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using ConsoleGame.RayTracing.Objects;
 
-namespace ConsoleRayTracing
+namespace ConsoleGame.RayTracing.Scenes
 {
     public sealed class VolumeScene : Scene
     {
@@ -22,8 +23,8 @@ namespace ConsoleRayTracing
 
             Func<int, int, int, (int mat, int meta)> generator = (gx, gy, gz) =>
             {
-                float fx = (float)gx * 0.06f;
-                float fz = (float)gz * 0.06f;
+                float fx = gx * 0.06f;
+                float fz = gz * 0.06f;
                 int baseH = Math.Max(1, ny / 4);
                 int amp = Math.Max(1, ny / 5);
                 int h = Clamp((int)(baseH + amp * (MathF.Sin(fx) + MathF.Cos(fz) + MathF.Sin(0.33f * fx + 0.77f * fz))), 1, ny - 1);
@@ -45,7 +46,7 @@ namespace ConsoleRayTracing
                 if (gy >= h - 3) return (2, 0);
 
                 int oreChance = FastHash3D(gx, gy, gz) & 63;
-                if (oreChance == 0) return (5, 200 + (FastHash3D(gx + 11, gy + 7, gz + 19) % 3));
+                if (oreChance == 0) return (5, 200 + FastHash3D(gx + 11, gy + 7, gz + 19) % 3);
 
                 return (1, 0);
             };

@@ -1,8 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using ConsoleGame.RayTracing.Objects;
 
-namespace ConsoleRayTracing
+namespace ConsoleGame.RayTracing.Scenes
 {
     public class Scene
     {

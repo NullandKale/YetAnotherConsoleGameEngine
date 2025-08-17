@@ -1,4 +1,4 @@
-﻿namespace ConsoleRayTracing
+﻿namespace ConsoleGame.RayTracing
 {
     public struct AmbientLight
     {

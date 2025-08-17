@@ -3,8 +3,9 @@ using System;
 using System.IO;
 using System.Globalization;
 using System.Collections.Generic;
+using ConsoleGame.RayTracing.Objects;
 
-namespace ConsoleRayTracing
+namespace ConsoleGame.RayTracing
 {
     public sealed class Mesh : Hittable
     {

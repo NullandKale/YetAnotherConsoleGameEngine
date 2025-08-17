@@ -1,6 +1,7 @@
 ﻿using System;
+using ConsoleGame.RayTracing;
 
-namespace ConsoleRayTracing
+namespace ConsoleGame.RayTracing.Objects
 {
     public sealed class VolumeGrid : Hittable
     {
@@ -15,9 +16,9 @@ namespace ConsoleRayTracing
         public VolumeGrid((int, int)[,,] cells, Vec3 minCorner, Vec3 voxelSize, Func<int, int, Material> materialLookup)
         {
             this.cells = cells;
-            this.nx = cells.GetLength(0);
-            this.ny = cells.GetLength(1);
-            this.nz = cells.GetLength(2);
+            nx = cells.GetLength(0);
+            ny = cells.GetLength(1);
+            nz = cells.GetLength(2);
             this.minCorner = minCorner;
             this.voxelSize = new Vec3(Math.Max(1e-6, voxelSize.X), Math.Max(1e-6, voxelSize.Y), Math.Max(1e-6, voxelSize.Z));
             this.materialLookup = materialLookup;
@@ -40,9 +41,9 @@ namespace ConsoleRayTracing
             int iy = ClampToGrid((int)Math.Floor((p.Y - minCorner.Y) / voxelSize.Y), ny);
             int iz = ClampToGrid((int)Math.Floor((p.Z - minCorner.Z) / voxelSize.Z), nz);
 
-            int stepX = r.Dir.X > 0.0 ? 1 : (r.Dir.X < 0.0 ? -1 : 0);
-            int stepY = r.Dir.Y > 0.0 ? 1 : (r.Dir.Y < 0.0 ? -1 : 0);
-            int stepZ = r.Dir.Z > 0.0 ? 1 : (r.Dir.Z < 0.0 ? -1 : 0);
+            int stepX = r.Dir.X > 0.0 ? 1 : r.Dir.X < 0.0 ? -1 : 0;
+            int stepY = r.Dir.Y > 0.0 ? 1 : r.Dir.Y < 0.0 ? -1 : 0;
+            int stepZ = r.Dir.Z > 0.0 ? 1 : r.Dir.Z < 0.0 ? -1 : 0;
 
             float nextVx = minCorner.X + (stepX > 0 ? (ix + 1) * voxelSize.X : ix * voxelSize.X);
             float nextVy = minCorner.Y + (stepY > 0 ? (iy + 1) * voxelSize.Y : iy * voxelSize.Y);

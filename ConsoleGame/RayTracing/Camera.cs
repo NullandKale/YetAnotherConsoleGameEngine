@@ -1,4 +1,4 @@
-﻿namespace ConsoleRayTracing
+﻿namespace ConsoleGame.RayTracing
 {
     public sealed class Camera
     {
@@ -21,8 +21,8 @@
 
         public Ray MakeRay(int px, int py, int width, int height)
         {
-            float ndcX = ((px + 0.5f) / (float)width) * 2.0f - 1.0f;
-            float ndcY = 1.0f - ((py + 0.5f) / (float)height) * 2.0f;
+            float ndcX = (px + 0.5f) / width * 2.0f - 1.0f;
+            float ndcY = 1.0f - (py + 0.5f) / height * 2.0f;
             float tanHalf = MathF.Tan(FovYRad * 0.5f);
             float camX = ndcX * tanHalf * Aspect;
             float camY = ndcY * tanHalf;

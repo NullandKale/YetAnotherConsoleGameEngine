@@ -3,7 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
-namespace ConsoleRayTracing
+namespace ConsoleGame.RayTracing.Objects
 {
     public sealed class BVH : Hittable
     {

@@ -1,38 +1,16 @@
 ﻿using System;
+using ConsoleGame.RayTracing;
 
 namespace ConsoleRayTracing
 {
-    // File: MeshSwatches.cs
-    // Curated sRGB swatches that intentionally "snap" to the 16-color console palette,
-    // with gentle brightness trims to avoid clipping after lighting + tone mapping.
-    // Use these Vec3 values for Material.Albedo in your mesh scenes.
-    //
-    // How to use (examples):
-    //   var gold = MeshSwatches.Gold;                     // Vec3
-    //   var mat  = MeshSwatches.Matte(gold, 0.30, 0.06);  // Material
-    //   s.Objects.Add(Mesh.FromObj(@"assets\teapot.obj", mat, 0.60f, new Vec3(...)));
-    //
-    // Rationale: We bias albedos toward the ANSI-16 / Windows Console defaults so the
-    // ConsolePalette.NearestColor() OKLab quantizer consistently returns the intended
-    // console color while still looking good under shading.
-    //
-    // Notes:
-    // - All constants are in sRGB [0,1] and chosen from or derived from the 16-color palette.
-    // - The *Soft variants are slightly dimmed to reduce highlight blowout on bright primaries.
-    // - Matte()/Mirror() helpers are provided for convenience; tweak spec/reflection per asset.
-
-    using System;
-
-    namespace ConsoleRayTracing
+    public static class MeshSwatches
     {
-        public static class MeshSwatches
+        // Exact 16-color console sRGB anchors (match ConsolePalette order):
+        // Black, DarkBlue, DarkGreen, DarkCyan, DarkRed, DarkMagenta, DarkYellow, Gray,
+        // DarkGray, Blue, Green, Cyan, Red, Magenta, Yellow, White
+        // (Kept here locally so scenes can pick deterministic swatches without peeking into ConsolePalette internals.)
+        private static readonly Vec3[] Palette16 = new Vec3[]
         {
-            // Exact 16-color console sRGB anchors (match ConsolePalette order):
-            // Black, DarkBlue, DarkGreen, DarkCyan, DarkRed, DarkMagenta, DarkYellow, Gray,
-            // DarkGray, Blue, Green, Cyan, Red, Magenta, Yellow, White
-            // (Kept here locally so scenes can pick deterministic swatches without peeking into ConsolePalette internals.)
-            private static readonly Vec3[] Palette16 = new Vec3[]
-            {
             new Vec3(0.00f,0.00f,0.00f),  // Black
             new Vec3(0.00f,0.00f,0.50f),  // DarkBlue
             new Vec3(0.00f,0.50f,0.00f),  // DarkGreen
@@ -49,72 +27,71 @@ namespace ConsoleRayTracing
             new Vec3(1.00f,0.00f,1.00f),  // Magenta
             new Vec3(1.00f,1.00f,0.00f),  // Yellow
             new Vec3(1.00f,1.00f,1.00f)   // White
-            };
+        };
 
-            private static Vec3 FromConsole(ConsoleColor c)
-            {
-                int idx = (int)c;
-                if (idx < 0 || idx >= Palette16.Length) return Palette16[0];
-                return Palette16[idx];
-            }
+        private static Vec3 FromConsole(ConsoleColor c)
+        {
+            int idx = (int)c;
+            if (idx < 0 || idx >= Palette16.Length) return Palette16[0];
+            return Palette16[idx];
+        }
 
-            private static Vec3 Scale(ConsoleColor c, float k)
-            {
-                if (k < 0.0f) k = 0.0f;
-                if (k > 1.0f) k = 1.0f;
-                Vec3 v = FromConsole(c);
-                return new Vec3(v.X * k, v.Y * k, v.Z * k);
-            }
+        private static Vec3 Scale(ConsoleColor c, float k)
+        {
+            if (k < 0.0f) k = 0.0f;
+            if (k > 1.0f) k = 1.0f;
+            Vec3 v = FromConsole(c);
+            return new Vec3(v.X * k, v.Y * k, v.Z * k);
+        }
 
-            // ---------- Neutrals (great for bones, clay, porcelain, etc.) ----------
-            public static readonly Vec3 Black = FromConsole(ConsoleColor.Black);
-            public static readonly Vec3 Charcoal = FromConsole(ConsoleColor.DarkGray);
-            public static readonly Vec3 Stone = FromConsole(ConsoleColor.Gray);
-            public static readonly Vec3 WhiteSoft = Scale(ConsoleColor.White, 0.85f);   // avoids harsh clipping
-            public static readonly Vec3 White = FromConsole(ConsoleColor.White);
+        // ---------- Neutrals (great for bones, clay, porcelain, etc.) ----------
+        public static readonly Vec3 Black = FromConsole(ConsoleColor.Black);
+        public static readonly Vec3 Charcoal = FromConsole(ConsoleColor.DarkGray);
+        public static readonly Vec3 Stone = FromConsole(ConsoleColor.Gray);
+        public static readonly Vec3 WhiteSoft = Scale(ConsoleColor.White, 0.85f);   // avoids harsh clipping
+        public static readonly Vec3 White = FromConsole(ConsoleColor.White);
 
-            // ---------- Metals / warm materials ----------
-            public static readonly Vec3 Gold = Scale(ConsoleColor.Yellow, 0.90f);
-            public static readonly Vec3 Brass = Scale(ConsoleColor.DarkYellow, 1.00f);
-            public static readonly Vec3 Copper = new Vec3(0.80f, 0.45f, 0.25f);      // will quantize near DarkYellow/Red
+        // ---------- Metals / warm materials ----------
+        public static readonly Vec3 Gold = Scale(ConsoleColor.Yellow, 0.90f);
+        public static readonly Vec3 Brass = Scale(ConsoleColor.DarkYellow, 1.00f);
+        public static readonly Vec3 Copper = new Vec3(0.80f, 0.45f, 0.25f);      // will quantize near DarkYellow/Red
 
-            // ---------- Gem-ish primaries (bright but softened a bit) ----------
-            public static readonly Vec3 Ruby = Scale(ConsoleColor.Red, 0.92f);
-            public static readonly Vec3 Emerald = Scale(ConsoleColor.Green, 0.85f);
-            public static readonly Vec3 Sapphire = Scale(ConsoleColor.Blue, 0.85f);
-            public static readonly Vec3 Amethyst = Scale(ConsoleColor.Magenta, 0.88f);
-            public static readonly Vec3 CyanSoft = Scale(ConsoleColor.Cyan, 0.85f);
-            public static readonly Vec3 Jade = Scale(ConsoleColor.DarkCyan, 1.00f);
+        // ---------- Gem-ish primaries (bright but softened a bit) ----------
+        public static readonly Vec3 Ruby = Scale(ConsoleColor.Red, 0.92f);
+        public static readonly Vec3 Emerald = Scale(ConsoleColor.Green, 0.85f);
+        public static readonly Vec3 Sapphire = Scale(ConsoleColor.Blue, 0.85f);
+        public static readonly Vec3 Amethyst = Scale(ConsoleColor.Magenta, 0.88f);
+        public static readonly Vec3 CyanSoft = Scale(ConsoleColor.Cyan, 0.85f);
+        public static readonly Vec3 Jade = Scale(ConsoleColor.DarkCyan, 1.00f);
 
-            // ---------- Helpful dark accents ----------
-            public static readonly Vec3 OxideRed = FromConsole(ConsoleColor.DarkRed);
-            public static readonly Vec3 PineGreen = FromConsole(ConsoleColor.DarkGreen);
-            public static readonly Vec3 Navy = FromConsole(ConsoleColor.DarkBlue);
-            public static readonly Vec3 Plum = FromConsole(ConsoleColor.DarkMagenta);
+        // ---------- Helpful dark accents ----------
+        public static readonly Vec3 OxideRed = FromConsole(ConsoleColor.DarkRed);
+        public static readonly Vec3 PineGreen = FromConsole(ConsoleColor.DarkGreen);
+        public static readonly Vec3 Navy = FromConsole(ConsoleColor.DarkBlue);
+        public static readonly Vec3 Plum = FromConsole(ConsoleColor.DarkMagenta);
 
-            // ---------- Console-aligned primaries (exact anchors) ----------
-            public static readonly Vec3 Red = FromConsole(ConsoleColor.Red);
-            public static readonly Vec3 Green = FromConsole(ConsoleColor.Green);
-            public static readonly Vec3 Blue = FromConsole(ConsoleColor.Blue);
-            public static readonly Vec3 Magenta = FromConsole(ConsoleColor.Magenta);
-            public static readonly Vec3 Yellow = FromConsole(ConsoleColor.Yellow);
-            public static readonly Vec3 Cyan = FromConsole(ConsoleColor.Cyan);
+        // ---------- Console-aligned primaries (exact anchors) ----------
+        public static readonly Vec3 Red = FromConsole(ConsoleColor.Red);
+        public static readonly Vec3 Green = FromConsole(ConsoleColor.Green);
+        public static readonly Vec3 Blue = FromConsole(ConsoleColor.Blue);
+        public static readonly Vec3 Magenta = FromConsole(ConsoleColor.Magenta);
+        public static readonly Vec3 Yellow = FromConsole(ConsoleColor.Yellow);
+        public static readonly Vec3 Cyan = FromConsole(ConsoleColor.Cyan);
 
-            // ---------- Material helpers ----------
-            public static Material Matte(Vec3 albedo, double specular = 0.10, double reflectivity = 0.00)
-            {
-                return new Material(albedo, specular, reflectivity, Vec3.Zero);
-            }
+        // ---------- Material helpers ----------
+        public static Material Matte(Vec3 albedo, double specular = 0.10, double reflectivity = 0.00)
+        {
+            return new Material(albedo, specular, reflectivity, Vec3.Zero);
+        }
 
-            public static Material Mirror(Vec3 tint, double reflectivity = 0.85)
-            {
-                return new Material(tint, 0.0, reflectivity, Vec3.Zero);
-            }
+        public static Material Mirror(Vec3 tint, double reflectivity = 0.85)
+        {
+            return new Material(tint, 0.0, reflectivity, Vec3.Zero);
+        }
 
-            public static Material Emissive(Vec3 emission)
-            {
-                return new Material(new Vec3(0.0f, 0.0f, 0.0f), 0.0, 0.0, emission);
-            }
+        public static Material Emissive(Vec3 emission)
+        {
+            return new Material(new Vec3(0.0f, 0.0f, 0.0f), 0.0, 0.0, emission);
         }
     }
 
@@ -146,52 +123,48 @@ namespace ConsoleRayTracing
             new Vec3(1.0f,1.0f,1.0f)    // White
         };
 
-        private static readonly Vec3[] OKLab;     // (L, a, b)
-        private static readonly Vec3[] OKLCh;     // (L, C, hRadians) precomputed for palette
+        // Precomputed CIE L*a*b* for the 16-color palette (D65), in double precision.
+        private static readonly double[,] PaletteLab;
         private static readonly int[] GrayIndices = new int[] { 0, 8, 7, 15 }; // Black, DarkGray, Gray, White
 
-        // Tunables (empirically good for 16-color mapping)
-        private const float ChromaNeutralThreshold = 0.020f;        // lower than before so fewer colors collapse to gray
-        private const float LWeight = 0.5f;                         // lightness weight
-        private const float CWeight = 1.8f;                         // chroma weight
-        private const float HWeightBase = 1.0f;                     // base hue weight
-        private const float HueChromaBoost = 0.6f;                  // hue weight scales with avg chroma: HWeightBase*(HueChromaBoost+avgC)
+        // Tunables: small gating to keep near-neutrals from snapping to tinted anchors; ΔE00 is used for ranking.
+        private const double ChromaNeutralGate = 2.5;   // if input C*ab < gate, only compare against gray ramp
+        private const double GrayPenaltyForChromatic = 0.0; // extra ΔE added to gray candidates for chromatic inputs; keep 0 to rely purely on ΔE00
 
         static ConsolePalette()
         {
-            int n = SRGB.Length;
-            OKLab = new Vec3[n];
-            OKLCh = new Vec3[n];
-            for (int i = 0; i < n; i++)
+            PaletteLab = new double[SRGB.Length, 3];
+            for (int i = 0; i < SRGB.Length; i++)
             {
-                Vec3 lab = SRGBtoOKLab(SRGB[i]);
-                OKLab[i] = lab;
-                OKLCh[i] = LabToLCh(lab);
+                ToLabD65(SRGB[i], out double L, out double a, out double b);
+                PaletteLab[i, 0] = L;
+                PaletteLab[i, 1] = a;
+                PaletteLab[i, 2] = b;
             }
         }
 
-        // Input c is expected in sRGB [0,1] (already tone-mapped + gamma, e.g., Gamma(...).Saturate()).
+        // Input c is expected in sRGB [0,1] (already tone-mapped + gamma).
         public static ConsoleColor NearestColor(Vec3 c)
         {
-            Vec3 clamped = new Vec3(Clamp01(c.X), Clamp01(c.Y), Clamp01(c.Z));
-            Vec3 lab = SRGBtoOKLab(clamped);
-            Vec3 lch = LabToLCh(lab);
-            float L = lch.X;
-            float C = lch.Y;
-            float h = lch.Z;
+            double r = Clamp01(c.X);
+            double g = Clamp01(c.Y);
+            double b = Clamp01(c.Z);
 
-            if (C < ChromaNeutralThreshold)
+            ToLabD65(new Vec3((float)r, (float)g, (float)b), out double L, out double A, out double B);
+            double Cab = Math.Sqrt(A * A + B * B);
+
+            int bestIdx = 0;
+            double bestDE = double.MaxValue;
+
+            if (Cab < ChromaNeutralGate)
             {
-                int bestIdx = GrayIndices[0];
-                float bestD = float.MaxValue;
                 for (int gi = 0; gi < GrayIndices.Length; gi++)
                 {
                     int idx = GrayIndices[gi];
-                    float dL = L - OKLCh[idx].X;
-                    float dist = (dL * dL) * 1.2f; // emphasize correct gray level a bit more
-                    if (dist < bestD)
+                    double dE = DeltaE00(L, A, B, PaletteLab[idx, 0], PaletteLab[idx, 1], PaletteLab[idx, 2]);
+                    if (dE < bestDE)
                     {
-                        bestD = dist;
+                        bestDE = dE;
                         bestIdx = idx;
                     }
                 }
@@ -199,28 +172,17 @@ namespace ConsoleRayTracing
             }
             else
             {
-                int bestIdx = 0;
-                float bestD = float.MaxValue;
-                for (int i = 0; i < OKLCh.Length; i++)
+                for (int i = 0; i < SRGB.Length; i++)
                 {
-                    // De-prioritize gray candidates when input is clearly chromatic
-                    bool isGrayCandidate = IsGrayIndex(i);
-                    float grayPenalty = isGrayCandidate ? 0.08f : 0.0f;
-
-                    float Li = OKLCh[i].X;
-                    float Ci = OKLCh[i].Y;
-                    float hi = OKLCh[i].Z;
-
-                    float dL = L - Li;
-                    float dC = C - Ci;
-                    float dh = WrapAngle(h - hi);
-                    float avgC = 0.5f * (C + Ci);
-                    float wH = HWeightBase * (HueChromaBoost + avgC);
-
-                    float dist = LWeight * dL * dL + CWeight * dC * dC + wH * dh * dh + grayPenalty;
-                    if (dist < bestD)
+                    bool grayCandidate = IsGrayIndex(i);
+                    double dE = DeltaE00(L, A, B, PaletteLab[i, 0], PaletteLab[i, 1], PaletteLab[i, 2]);
+                    if (grayCandidate)
                     {
-                        bestD = dist;
+                        dE += GrayPenaltyForChromatic;
+                    }
+                    if (dE < bestDE)
+                    {
+                        bestDE = dE;
                         bestIdx = i;
                     }
                 }
@@ -228,44 +190,134 @@ namespace ConsoleRayTracing
             }
         }
 
-        // -------- Perceptual color helpers (OKLab / OKLCh) --------
-
-        private static Vec3 SRGBtoOKLab(Vec3 srgb)
+        // -------- CIEDE2000 ΔE implementation (Sharma et al.) --------
+        private static double DeltaE00(double L1, double a1, double b1, double L2, double a2, double b2)
         {
-            float r = SRGBToLinear(srgb.X);
-            float g = SRGBToLinear(srgb.Y);
-            float b = SRGBToLinear(srgb.Z);
+            const double kL = 1.0;
+            const double kC = 1.0;
+            const double kH = 1.0;
 
-            float l = 0.4122214708f * r + 0.5363325363f * g + 0.0514459929f * b;
-            float m = 0.2119034982f * r + 0.6806995451f * g + 0.1073969566f * b;
-            float s = 0.0883024619f * r + 0.2817188376f * g + 0.6299787005f * b;
+            double C1 = Math.Sqrt(a1 * a1 + b1 * b1);
+            double C2 = Math.Sqrt(a2 * a2 + b2 * b2);
+            double Cbar = 0.5 * (C1 + C2);
+            double Cbar7 = Math.Pow(Cbar, 7.0);
+            double G = 0.5 * (1.0 - Math.Sqrt(Cbar7 / (Cbar7 + Math.Pow(25.0, 7.0))));
 
-            float l_ = Cbrt(l);
-            float m_ = Cbrt(m);
-            float s_ = Cbrt(s);
+            double a1p = (1.0 + G) * a1;
+            double a2p = (1.0 + G) * a2;
+            double C1p = Math.Sqrt(a1p * a1p + b1 * b1);
+            double C2p = Math.Sqrt(a2p * a2p + b2 * b2);
 
-            float L = 0.2104542553f * l_ + 0.7936177850f * m_ - 0.0040720468f * s_;
-            float A = 1.9779984951f * l_ - 2.4285922050f * m_ + 0.4505937099f * s_;
-            float B = 0.0259040371f * l_ + 0.7827717662f * m_ - 0.8086757660f * s_;
+            double h1p = Math.Atan2(b1, a1p);
+            if (h1p < 0.0) h1p += 2.0 * Math.PI;
+            double h2p = Math.Atan2(b2, a2p);
+            if (h2p < 0.0) h2p += 2.0 * Math.PI;
 
-            return new Vec3(L, A, B);
+            double dLp = L2 - L1;
+            double dCp = C2p - C1p;
+
+            double dhp;
+            double dh = h2p - h1p;
+            if (C1p * C2p == 0.0)
+            {
+                dhp = 0.0;
+            }
+            else
+            {
+                if (Math.Abs(dh) <= Math.PI)
+                {
+                    dhp = dh;
+                }
+                else
+                {
+                    if (dh > 0.0) dhp = dh - 2.0 * Math.PI;
+                    else dhp = dh + 2.0 * Math.PI;
+                }
+            }
+
+            double dHp = 2.0 * Math.Sqrt(C1p * C2p) * Math.Sin(dhp * 0.5);
+
+            double Lbarp = 0.5 * (L1 + L2);
+            double Cbarp = 0.5 * (C1p + C2p);
+
+            double hbarp;
+            if (C1p * C2p == 0.0)
+            {
+                hbarp = h1p + h2p;
+            }
+            else
+            {
+                if (Math.Abs(h1p - h2p) <= Math.PI)
+                {
+                    hbarp = 0.5 * (h1p + h2p);
+                }
+                else
+                {
+                    if (h1p + h2p < 2.0 * Math.PI) hbarp = 0.5 * (h1p + h2p + 2.0 * Math.PI);
+                    else hbarp = 0.5 * (h1p + h2p - 2.0 * Math.PI);
+                }
+            }
+
+            double T = 1.0
+                       - 0.17 * Math.Cos(hbarp - DegToRad(30.0))
+                       + 0.24 * Math.Cos(2.0 * hbarp)
+                       + 0.32 * Math.Cos(3.0 * hbarp + DegToRad(6.0))
+                       - 0.20 * Math.Cos(4.0 * hbarp - DegToRad(63.0));
+
+            double SL = 1.0 + (0.015 * Math.Pow(Lbarp - 50.0, 2.0)) / Math.Sqrt(20.0 + Math.Pow(Lbarp - 50.0, 2.0));
+            double SC = 1.0 + 0.045 * Cbarp;
+            double SH = 1.0 + 0.015 * Cbarp * T;
+
+            double deltaTheta = DegToRad(30.0) * Math.Exp(-Math.Pow((RadToDeg(hbarp) - 275.0) / 25.0, 2.0));
+            double RC = 2.0 * Math.Sqrt(Math.Pow(Cbarp, 7.0) / (Math.Pow(Cbarp, 7.0) + Math.Pow(25.0, 7.0)));
+            double RT = -Math.Sin(2.0 * deltaTheta) * RC;
+
+            double dE = Math.Sqrt(
+                Math.Pow(dLp / (kL * SL), 2.0) +
+                Math.Pow(dCp / (kC * SC), 2.0) +
+                Math.Pow(dHp / (kH * SH), 2.0) +
+                RT * (dCp / (kC * SC)) * (dHp / (kH * SH))
+            );
+
+            return dE;
         }
 
-        private static Vec3 LabToLCh(Vec3 lab)
+        // -------- sRGB (gamma) -> XYZ (D65) -> Lab (D65) --------
+        private static void ToLabD65(Vec3 srgb, out double L, out double a, out double b)
         {
-            float L = lab.X;
-            float a = lab.Y;
-            float b = lab.Z;
-            float C = MathF.Sqrt(a * a + b * b);
-            float h = MathF.Atan2(b, a); // [-π, π]
-            return new Vec3(L, C, h);
+            double R = SRGBToLinear(srgb.X);
+            double G = SRGBToLinear(srgb.Y);
+            double B = SRGBToLinear(srgb.Z);
+
+            double X = 0.4124564 * R + 0.3575761 * G + 0.1804375 * B;
+            double Y = 0.2126729 * R + 0.7151522 * G + 0.0721750 * B;
+            double Z = 0.0193339 * R + 0.1191920 * G + 0.9503041 * B;
+
+            const double Xn = 0.95047;  // D65
+            const double Yn = 1.00000;
+            const double Zn = 1.08883;
+
+            double fx = LabPivot(X / Xn);
+            double fy = LabPivot(Y / Yn);
+            double fz = LabPivot(Z / Zn);
+
+            L = 116.0 * fy - 16.0;
+            a = 500.0 * (fx - fy);
+            b = 200.0 * (fy - fz);
         }
 
-        private static float WrapAngle(float a)
+        private static double LabPivot(double t)
         {
-            while (a > MathF.PI) a -= 2.0f * MathF.PI;
-            while (a < -MathF.PI) a += 2.0f * MathF.PI;
-            return a;
+            const double e = 216.0 / 24389.0; // (6/29)^3
+            const double k = 24389.0 / 27.0;  // (29/3)^3
+            if (t > e) return Math.Pow(t, 1.0 / 3.0);
+            return (k * t + 16.0) / 116.0;
+        }
+
+        private static double SRGBToLinear(double c)
+        {
+            if (c <= 0.04045) return c / 12.92;
+            return Math.Pow((c + 0.055) / 1.055, 2.4);
         }
 
         private static bool IsGrayIndex(int idx)
@@ -277,23 +329,21 @@ namespace ConsoleRayTracing
             return false;
         }
 
-        private static float SRGBToLinear(float c)
+        private static double Clamp01(double v)
         {
-            if (c <= 0.04045f) return c / 12.92f;
-            return MathF.Pow((c + 0.055f) / 1.055f, 2.4f);
-        }
-
-        private static float Cbrt(float x)
-        {
-            if (x <= 0.0f) return 0.0f;
-            return MathF.Pow(x, 1.0f / 3.0f);
-        }
-
-        private static float Clamp01(float v)
-        {
-            if (v < 0.0f) return 0.0f;
-            if (v > 1.0f) return 1.0f;
+            if (v < 0.0) return 0.0;
+            if (v > 1.0) return 1.0;
             return v;
+        }
+
+        private static double DegToRad(double d)
+        {
+            return d * (Math.PI / 180.0);
+        }
+
+        private static double RadToDeg(double r)
+        {
+            return r * (180.0 / Math.PI);
         }
     }
 }

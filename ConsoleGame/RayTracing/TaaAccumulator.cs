@@ -1,7 +1,7 @@
 ﻿// File: TaaAccumulator.cs
 using System;
 
-namespace ConsoleRayTracing
+namespace ConsoleGame.RayTracing
 {
     public sealed class TaaAccumulator
     {
@@ -31,14 +31,14 @@ namespace ConsoleRayTracing
             this.enabled = enabled;
             this.width = width;
             this.height = height;
-            this.ss = superSample;
-            this.jitterPeriod = Math.Max(1, ss * ss);
+            ss = superSample;
+            jitterPeriod = Math.Max(1, ss * ss);
             this.alpha = Clamp01(alpha);
-            this.prevTop = new float[width, height, 3];
-            this.prevBot = new float[width, height, 3];
-            this.nextTop = new float[width, height, 3];
-            this.nextBot = new float[width, height, 3];
-            this.historyValid = false;
+            prevTop = new float[width, height, 3];
+            prevBot = new float[width, height, 3];
+            nextTop = new float[width, height, 3];
+            nextBot = new float[width, height, 3];
+            historyValid = false;
         }
 
         public void SetEnabled(bool value)
@@ -59,7 +59,7 @@ namespace ConsoleRayTracing
 
         public void NotifyCamera(double x, double y, double z, float yaw, float pitch)
         {
-            bool moved = double.IsNaN(lastCamX) || ((x - lastCamX) * (x - lastCamX) + (y - lastCamY) * (y - lastCamY) + (z - lastCamZ) * (z - lastCamZ) > 1e-6) || MathF.Abs(yaw - lastYaw) > 1e-4f || MathF.Abs(pitch - lastPitch) > 1e-4f;
+            bool moved = double.IsNaN(lastCamX) || (x - lastCamX) * (x - lastCamX) + (y - lastCamY) * (y - lastCamY) + (z - lastCamZ) * (z - lastCamZ) > 1e-6 || MathF.Abs(yaw - lastYaw) > 1e-4f || MathF.Abs(pitch - lastPitch) > 1e-4f;
             if (moved)
             {
                 historyValid = false;
@@ -80,7 +80,7 @@ namespace ConsoleRayTracing
                 return;
             }
             jx = jitterPhase % ss;
-            jy = (jitterPhase / ss) % ss;
+            jy = jitterPhase / ss % ss;
         }
 
         public void Accumulate(int cx, int cy, float topR, float topG, float topB, float botR, float botG, float botB, out float outTopR, out float outTopG, out float outTopB, out float outBotR, out float outBotG, out float outBotB)

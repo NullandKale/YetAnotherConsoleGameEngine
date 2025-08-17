@@ -2,9 +2,10 @@
 using System;
 using System.IO;
 using System.Globalization;
-using ConsoleRayTracing.ConsoleRayTracing;
+using ConsoleRayTracing;
+using ConsoleGame.RayTracing.Objects;
 
-namespace ConsoleRayTracing
+namespace ConsoleGame.RayTracing.Scenes
 {
     public static class MeshScenes
     {
@@ -79,7 +80,7 @@ namespace ConsoleRayTracing
                 throw new FileNotFoundException("OBJ not found or empty", objPath);
             }
             float minY = mn.Y;
-            float yTranslate = targetPos.Y - (minY * scale) + 0.01f;
+            float yTranslate = targetPos.Y - minY * scale + 0.01f;
             Vec3 translate = new Vec3(targetPos.X, yTranslate, targetPos.Z);
             s.Objects.Add(Mesh.FromObj(objPath, mat, scale: scale, translate: translate));
         }

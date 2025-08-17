@@ -1,7 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using ConsoleGame.RayTracing;
 
-namespace ConsoleRayTracing
+namespace ConsoleGame.RayTracing.Objects
 {
     public abstract class Hittable
     {

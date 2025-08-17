@@ -1,4 +1,7 @@
-﻿namespace ConsoleRayTracing
+﻿using ConsoleGame.RayTracing.Objects;
+using ConsoleRayTracing;
+
+namespace ConsoleGame.RayTracing.Scenes
 {
     public static class Scenes
     {
@@ -79,7 +82,7 @@
             {
                 for (int z = 6; z <= 9; z++)
                 {
-                    bool check = ((x + z) & 1) == 0;
+                    bool check = (x + z & 1) == 0;
                     cells[x, 1, z] = (check ? 1 : 4, 0);
                 }
             }
@@ -154,7 +157,7 @@
             Vec3 HsvToRgb(float h, float sSat, float v)
             {
                 float c = v * sSat;
-                float hh = (h % 1.0f) * 6.0f;
+                float hh = h % 1.0f * 6.0f;
                 float x = c * (1.0f - MathF.Abs(hh % 2.0f - 1.0f));
                 float r = 0.0f, g = 0.0f, b = 0.0f;
                 if (hh < 1.0) { r = c; g = x; b = 0.0f; }
@@ -193,9 +196,9 @@
                 bool placed = false;
                 for (int attempt = 0; attempt < attemptsPerSphere && !placed; attempt++)
                 {
-                    float radius = 0.18f + ((float)rng.NextDouble()) * 0.32f; // [0.18, 0.50]
-                    float x = -9.0f + ((float)rng.NextDouble()) * 9.0f;       // [-3, 3]
-                    float z = -9.8f + ((float)rng.NextDouble()) * 4.6f;       // [-4.8, -0.2]
+                    float radius = 0.18f + (float)rng.NextDouble() * 0.32f; // [0.18, 0.50]
+                    float x = -9.0f + (float)rng.NextDouble() * 9.0f;       // [-3, 3]
+                    float z = -9.8f + (float)rng.NextDouble() * 4.6f;       // [-4.8, -0.2]
                     float y = radius;                               // sit on the ground plane (y=0)
                     Vec3 center = new Vec3(x, y, z);
 
@@ -204,13 +207,13 @@
                         continue;
                     }
 
-                    float hue = ((float)rng.NextDouble());                   // [0,1)
-                    float sat = 0.65f + ((float)rng.NextDouble()) * 0.35f;     // [0.65,1.0]
-                    float val = 0.55f + ((float)rng.NextDouble()) * 0.45f;     // [0.55,1.0]
+                    float hue = (float)rng.NextDouble();                   // [0,1)
+                    float sat = 0.65f + (float)rng.NextDouble() * 0.35f;     // [0.65,1.0]
+                    float val = 0.55f + (float)rng.NextDouble() * 0.45f;     // [0.55,1.0]
                     Vec3 rgb = HsvToRgb(hue, sat, val);
 
-                    float spec = 0.10f + ((float)rng.NextDouble()) * 0.30f;    // some spec
-                    float refl = ((float)rng.NextDouble()) < 0.2f ? 0.6f : 0.05f; // occasional reflective balls
+                    float spec = 0.10f + (float)rng.NextDouble() * 0.30f;    // some spec
+                    float refl = (float)rng.NextDouble() < 0.2f ? 0.6f : 0.05f; // occasional reflective balls
 
                     Material m = new Material(rgb, spec, refl, Vec3.Zero);
                     s.Objects.Add(new Sphere(center, radius, m));
@@ -355,7 +358,7 @@
             {
                 int cx = (int)MathF.Floor(pos.X / scale);
                 int cz = (int)MathF.Floor(pos.Z / scale);
-                bool check = ((cx + cz) & 1) == 0;
+                bool check = (cx + cz & 1) == 0;
                 Vec3 albedo = check ? a : b;
                 return new Material(albedo, 0.0, 0.0, Vec3.Zero);
             };

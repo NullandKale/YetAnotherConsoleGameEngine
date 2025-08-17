@@ -1,4 +1,4 @@
-﻿namespace ConsoleRayTracing
+﻿namespace ConsoleGame.RayTracing
 {
     public sealed class PointLight
     {
