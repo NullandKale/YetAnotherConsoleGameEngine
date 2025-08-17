@@ -1,7 +1,6 @@
-/*
 # Ray Tracing with Console.Write()
 
-![screenshot](Assets/Screenshot 2025-08-17 182206.png)
+![screenshot](Assets/Screenshot%202025-08-17%20182206.png)
 
 A real-time CPU ray tracer that renders to a text console.
 
@@ -29,4 +28,3 @@ Press I/U to cycle. The table is built in `RaytraceEntity.BuildSceneTable()` and
 Each scene provides default camera pose and FOV; switching resets TAA history and rebuilds the BVH.
 
 ---
-*/
