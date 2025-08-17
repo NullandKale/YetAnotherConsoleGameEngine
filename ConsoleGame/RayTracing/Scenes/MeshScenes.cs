@@ -64,6 +64,7 @@ namespace ConsoleGame.RayTracing.Scenes
         private static Scene NewBaseScene()
         {
             Scene s = new Scene();
+            s.Ambient = new AmbientLight(new Vec3(1, 1, 1), 0.15f);
             s.Objects.Add(new Plane(new Vec3(0.0, 0.0, 0.0), new Vec3(0.0, 1.0, 0.0), FloorMat(new Vec3(1, 1, 1)), 0.01f, 0.00f));
             s.Lights.Add(new PointLight(new Vec3(0.0, 30.6, -4.2), new Vec3(1.0, 0.95, 0.88), 110.0f));
             s.Lights.Add(new PointLight(new Vec3(0.0, 30.0, 4.2), new Vec3(0.85, 0.90, 1.0), 85.0f));

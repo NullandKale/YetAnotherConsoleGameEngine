@@ -234,20 +234,8 @@ namespace ConsoleRayTracing
             list.Add(() => MeshScenes.BuildTeapotScene());
             list.Add(() => MeshScenes.BuildCowScene());
             list.Add(() => MeshScenes.BuildDragonScene());
-            list.Add(() =>
-            {
-                Func<int, int, Material> materialLookup = (id, meta) =>
-                {
-                    if (id == 1) return new Material(new Vec3(0.55, 0.55, 0.55), 0.0, 0.0, Vec3.Zero);
-                    if (id == 2) return new Material(new Vec3(0.40, 0.25, 0.15), 0.0, 0.0, Vec3.Zero);
-                    if (id == 3) return new Material(new Vec3(0.15, 0.75, 0.20), 0.1, 0.0, Vec3.Zero);
-                    if (id == 4) return new Material(new Vec3(0.15, 0.35, 0.95), 0.0, 0.02, Vec3.Zero);
-                    if (id == 5) return new Material(new Vec3(0.9, 0.85, 0.55), 0.0, 0.0, Vec3.Zero);
-                    return new Material(new Vec3(0.7, 0.7, 0.7), 0.0, 0.0, Vec3.Zero);
-                };
-                return VolumeScenes.BuildMinecraftLike("test.bin", new Vec3(-100, -100, -100), new Vec3(2, 2, 2), materialLookup, 8, 8, 8, 32);
-            });
-
+            list.Add(() => VolumeScenes.BuildMinecraftLike("test.bin"));
+            
             return list.ToArray();
         }
     }

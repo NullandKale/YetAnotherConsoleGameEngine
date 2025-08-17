@@ -7,7 +7,7 @@ namespace ConsoleGame.Renderer
 {
     public class Terminal
     {
-        private TerminalRenderer renderer;
+        private Win32TerminalRenderer renderer;
         private TerminalInput input;
         private bool isRunning;
         private Stopwatch stopwatch;
@@ -17,7 +17,9 @@ namespace ConsoleGame.Renderer
 
         public Terminal()
         {
-            renderer = new TerminalRenderer();
+            //renderer = new TerminalRenderer();
+            //renderer = new ANSITerminalRenderer();
+            renderer = new Win32TerminalRenderer();
             input = new TerminalInput();
             isRunning = false;
             stopwatch = new Stopwatch();
@@ -94,7 +96,7 @@ namespace ConsoleGame.Renderer
                 double frameMs = stopwatch.Elapsed.TotalMilliseconds;
                 double fps = frameMs > 0.0 ? 1000.0 / frameMs : 0.0;
                 string hud = $"{debugString} fps: {fps:0.0}  ms: {frameMs:0.00}";
-                int hudlen = renderer.consoleWidth - 1;
+                int hudlen = renderer.consoleWidth - 10;
                 if (hud.Length < hudlen)
                 {
                     hud = hud.PadRight(hudlen);
@@ -103,6 +105,7 @@ namespace ConsoleGame.Renderer
                 {
                     hud = hud.Substring(0, hudlen);
                 }
+                //Console.SetCursorPosition(0, renderer.consoleHeight);
                 Console.Write(hud);
             }
 

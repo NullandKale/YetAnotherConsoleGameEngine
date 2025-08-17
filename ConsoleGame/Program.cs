@@ -21,7 +21,7 @@ namespace ConsoleRayTracing
             int cellsW = Console.WindowWidth - 1;
             int cellsH = Console.WindowHeight - 1;
 
-            int superSample = 1;
+            int superSample = 2;
             if (args != null && args.Length > 0)
             {
                 int parsed;
