@@ -2,147 +2,16 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Numerics;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 
 namespace ConsoleGame.RayTracing.Objects
 {
     public sealed class BVH : Hittable
     {
-        private sealed class Node
-        {
-            public AABB Box;
-            public Node Left;
-            public Node Right;
-            public Hittable Leaf;
-            public int LeafId;
-
-            public bool IsLeaf()
-            {
-                return Leaf != null;
-            }
-        }
-
-        private struct Item
-        {
-            public Hittable Obj;
-            public AABB Box;
-            public Vec3 Centroid;
-        }
-
-        private struct AABB
-        {
-            public Vec3 Min;
-            public Vec3 Max;
-
-            public AABB(Vec3 min, Vec3 max)
-            {
-                Min = min;
-                Max = max;
-            }
-
-            public static AABB Surround(AABB a, AABB b)
-            {
-                Vec3 mn = new Vec3(MathF.Min(a.Min.X, b.Min.X), MathF.Min(a.Min.Y, b.Min.Y), MathF.Min(a.Min.Z, b.Min.Z));
-                Vec3 mx = new Vec3(MathF.Max(a.Max.X, b.Max.X), MathF.Max(a.Max.Y, b.Max.Y), MathF.Max(a.Max.Z, b.Max.Z));
-                return new AABB(mn, mx);
-            }
-
-            public bool Hit(Ray r, float tMin, float tMax)
-            {
-                float invDx = 1.0f / r.Dir.X;
-                float t0x = (Min.X - r.Origin.X) * invDx;
-                float t1x = (Max.X - r.Origin.X) * invDx;
-                if (invDx < 0.0f)
-                {
-                    float tmp = t0x;
-                    t0x = t1x;
-                    t1x = tmp;
-                }
-                if (t0x > tMin)
-                {
-                    tMin = t0x;
-                }
-                if (t1x < tMax)
-                {
-                    tMax = t1x;
-                }
-                if (tMax <= tMin)
-                {
-                    return false;
-                }
-
-                float invDy = 1.0f / r.Dir.Y;
-                float t0y = (Min.Y - r.Origin.Y) * invDy;
-                float t1y = (Max.Y - r.Origin.Y) * invDy;
-                if (invDy < 0.0f)
-                {
-                    float tmp = t0y;
-                    t0y = t1y;
-                    t1y = tmp;
-                }
-                if (t0y > tMin)
-                {
-                    tMin = t0y;
-                }
-                if (t1y < tMax)
-                {
-                    tMax = t1y;
-                }
-                if (tMax <= tMin)
-                {
-                    return false;
-                }
-
-                float invDz = 1.0f / r.Dir.Z;
-                float t0z = (Min.Z - r.Origin.Z) * invDz;
-                float t1z = (Max.Z - r.Origin.Z) * invDz;
-                if (invDz < 0.0f)
-                {
-                    float tmp = t0z;
-                    t0z = t1z;
-                    t1z = tmp;
-                }
-                if (t0z > tMin)
-                {
-                    tMin = t0z;
-                }
-                if (t1z < tMax)
-                {
-                    tMax = t1z;
-                }
-                if (tMax <= tMin)
-                {
-                    return false;
-                }
-
-                return true;
-            }
-        }
-
-        private sealed class CentroidComparer : IComparer<Item>
-        {
-            private readonly int axis;
-
-            public CentroidComparer(int axis)
-            {
-                this.axis = axis;
-            }
-
-            public int Compare(Item a, Item b)
-            {
-                float ca = axis == 0 ? a.Centroid.X : axis == 1 ? a.Centroid.Y : a.Centroid.Z;
-                float cb = axis == 0 ? b.Centroid.X : axis == 1 ? b.Centroid.Y : b.Centroid.Z;
-                if (ca < cb)
-                {
-                    return -1;
-                }
-                if (ca > cb)
-                {
-                    return 1;
-                }
-                return 0;
-            }
-        }
-
+        private const int TargetLeafSize = 4;
+        private const int SAH_Bins = 16;
         private readonly Node root;
 
         public BVH(IEnumerable<Hittable> objects)
@@ -177,24 +46,301 @@ namespace ConsoleGame.RayTracing.Objects
             }
         }
 
-        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec)
-        {
-            bool hitAnything = false;
-            float closest = tMax;
-            HitRecord tmp = default;
 
-            if (root != null)
+        private sealed class Node
+        {
+            public AABB Box;
+            public Node Left;
+            public Node Right;
+            public Hittable[] Leaf;
+            public int LeafCount;
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public bool IsLeaf()
             {
-                if (HitNode(root, r, tMin, closest, 0, ref tmp))
-                {
-                    hitAnything = true;
-                    closest = tmp.T;
-                    rec = tmp;
-                }
+                return Leaf != null;
+            }
+        }
+
+        private struct Item
+        {
+            public Hittable Obj;
+            public AABB Box;
+            public Vec3 Centroid;
+        }
+
+        private struct AABB
+        {
+            public Vec3 Min;
+            public Vec3 Max;
+
+            public AABB(Vec3 min, Vec3 max)
+            {
+                Min = min;
+                Max = max;
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public static AABB Surround(AABB a, AABB b)
+            {
+                Vec3 mn = new Vec3(MathF.Min(a.Min.X, b.Min.X), MathF.Min(a.Min.Y, b.Min.Y), MathF.Min(a.Min.Z, b.Min.Z));
+                Vec3 mx = new Vec3(MathF.Max(a.Max.X, b.Max.X), MathF.Max(a.Max.Y, b.Max.Y), MathF.Max(a.Max.Z, b.Max.Z));
+                return new AABB(mn, mx);
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public static float SurfaceArea(in AABB b)
+            {
+                float dx = b.Max.X - b.Min.X;
+                float dy = b.Max.Y - b.Min.Y;
+                float dz = b.Max.Z - b.Min.Z;
+                return 2.0f * (dx * dy + dx * dz + dy * dz);
+            }
+
+            // Williams et al. style slab test with SIMD acceleration; returns tNear/tFar for child ordering.
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public bool HitFast(in Ray r, float tMin, float tMax, float invDx, float invDy, float invDz, int signX, int signY, int signZ, out float tNear, out float tFar)
+            {
+                if (Avx.IsSupported)
+                {
+                    Vector256<float> vMin = Vector256.Create(Min.X, Min.Y, Min.Z, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+                    Vector256<float> vMax = Vector256.Create(Max.X, Max.Y, Max.Z, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+                    Vector256<float> vO = Vector256.Create(r.Origin.X, r.Origin.Y, r.Origin.Z, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+                    Vector256<float> vInv = Vector256.Create(invDx, invDy, invDz, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f);
+                    Vector256<float> vSign = Vector256.Create((float)signX, (float)signY, (float)signZ, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+                    Vector256<float> vZero = Vector256<float>.Zero;
+
+                    Vector256<float> eqZero = Avx.CompareEqual(vSign, vZero);
+                    Vector256<float> low = Avx.Or(Avx.And(eqZero, vMin), Avx.AndNot(eqZero, vMax));
+                    Vector256<float> high = Avx.Or(Avx.And(eqZero, vMax), Avx.AndNot(eqZero, vMin));
+
+                    Vector256<float> vTMin = Avx.Multiply(Avx.Subtract(low, vO), vInv);
+                    Vector256<float> vTMax = Avx.Multiply(Avx.Subtract(high, vO), vInv);
+
+                    float txmin = vTMin.GetElement(0);
+                    float tymin = vTMin.GetElement(1);
+                    float tzmin = vTMin.GetElement(2);
+
+                    float txmax = vTMax.GetElement(0);
+                    float tymax = vTMax.GetElement(1);
+                    float tzmax = vTMax.GetElement(2);
+
+                    float t0 = MathF.Max(txmin, MathF.Max(tymin, tzmin));
+                    float t1 = MathF.Min(txmax, MathF.Min(tymax, tzmax));
+
+                    if (t0 > tMin)
+                    {
+                        tMin = t0;
+                    }
+
+                    if (t1 < tMax)
+                    {
+                        tMax = t1;
+                    }
+
+                    tNear = tMin;
+                    tFar = tMax;
+                    return tMax >= tMin;
+                }
+
+                if (Sse.IsSupported)
+                {
+                    Vector128<float> vMin = Vector128.Create(Min.X, Min.Y, Min.Z, 0.0f);
+                    Vector128<float> vMax = Vector128.Create(Max.X, Max.Y, Max.Z, 0.0f);
+                    Vector128<float> vO = Vector128.Create(r.Origin.X, r.Origin.Y, r.Origin.Z, 0.0f);
+                    Vector128<float> vInv = Vector128.Create(invDx, invDy, invDz, 1.0f);
+                    Vector128<float> vSign = Vector128.Create((float)signX, (float)signY, (float)signZ, 0.0f);
+                    Vector128<float> vZero = Vector128<float>.Zero;
+
+                    Vector128<float> eqZero = Sse.CompareEqual(vSign, vZero);
+                    Vector128<float> low = Sse.Or(Sse.And(eqZero, vMin), Sse.AndNot(eqZero, vMax));
+                    Vector128<float> high = Sse.Or(Sse.And(eqZero, vMax), Sse.AndNot(eqZero, vMin));
+
+                    Vector128<float> vTMin = Sse.Multiply(Sse.Subtract(low, vO), vInv);
+                    Vector128<float> vTMax = Sse.Multiply(Sse.Subtract(high, vO), vInv);
+
+                    float txmin = vTMin.GetElement(0);
+                    float tymin = vTMin.GetElement(1);
+                    float tzmin = vTMin.GetElement(2);
+
+                    float txmax = vTMax.GetElement(0);
+                    float tymax = vTMax.GetElement(1);
+                    float tzmax = vTMax.GetElement(2);
+
+                    float t0 = MathF.Max(txmin, MathF.Max(tymin, tzmin));
+                    float t1 = MathF.Min(txmax, MathF.Min(tymax, tzmax));
+
+                    if (t0 > tMin)
+                    {
+                        tMin = t0;
+                    }
+
+                    if (t1 < tMax)
+                    {
+                        tMax = t1;
+                    }
+
+                    tNear = tMin;
+                    tFar = tMax;
+                    return tMax >= tMin;
+                }
+
+                float ox = r.Origin.X;
+                float oy = r.Origin.Y;
+                float oz = r.Origin.Z;
+
+                float txminS = ((signX == 0 ? Min.X : Max.X) - ox) * invDx;
+                float txmaxS = ((signX == 0 ? Max.X : Min.X) - ox) * invDx;
+
+                float tyminS = ((signY == 0 ? Min.Y : Max.Y) - oy) * invDy;
+                float tymaxS = ((signY == 0 ? Max.Y : Min.Y) - oy) * invDy;
+
+                float tzminS = ((signZ == 0 ? Min.Z : Max.Z) - oz) * invDz;
+                float tzmaxS = ((signZ == 0 ? Max.Z : Min.Z) - oz) * invDz;
+
+                float t0S = MathF.Max(txminS, tyminS);
+                t0S = MathF.Max(t0S, tzminS);
+                if (t0S > tMin)
+                {
+                    tMin = t0S;
+                }
+
+                float t1S = MathF.Min(txmaxS, tymaxS);
+                t1S = MathF.Min(t1S, tzmaxS);
+                if (t1S < tMax)
+                {
+                    tMax = t1S;
+                }
+
+                tNear = tMin;
+                tFar = tMax;
+                return tMax >= tMin;
+            }
+        }
+
+
+        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec)
+        {
+            if (root == null)
+            {
+                return false;
+            }
+
+            float invDx = 1.0f / r.Dir.X;
+            float invDy = 1.0f / r.Dir.Y;
+            float invDz = 1.0f / r.Dir.Z;
+
+            int signX = invDx < 0.0f ? 1 : 0;
+            int signY = invDy < 0.0f ? 1 : 0;
+            int signZ = invDz < 0.0f ? 1 : 0;
+
+            Node[] stackArray = System.Buffers.ArrayPool<Node>.Shared.Rent(128);
+            Span<Node> stack = stackArray;
+            int sp = 0;
+            stack[sp++] = root;
+
+            bool hitAnything = false;
+            float closest = tMax;
+            HitRecord best = default;
+
+            try
+            {
+                while (sp > 0)
+                {
+                    Node node = stack[--sp];
+
+                    float nodeNear, nodeFar;
+                    if (!node.Box.HitFast(r, tMin, closest, invDx, invDy, invDz, signX, signY, signZ, out nodeNear, out nodeFar))
+                    {
+                        continue;
+                    }
+
+                    if (node.IsLeaf())
+                    {
+                        for (int i = 0; i < node.LeafCount; i++)
+                        {
+                            HitRecord tmp = default;
+                            if (node.Leaf[i].Hit(r, tMin, closest, ref tmp))
+                            {
+                                hitAnything = true;
+                                closest = tmp.T;
+                                best = tmp;
+                            }
+                        }
+                        continue;
+                    }
+
+                    float lNear = 0.0f, lFar = 0.0f, rNear = 0.0f, rFar = 0.0f;
+                    bool hitL = node.Left != null && node.Left.Box.HitFast(r, tMin, closest, invDx, invDy, invDz, signX, signY, signZ, out lNear, out lFar);
+                    bool hitR = node.Right != null && node.Right.Box.HitFast(r, tMin, closest, invDx, invDy, invDz, signX, signY, signZ, out rNear, out rFar);
+
+                    if (hitL & hitR)
+                    {
+                        if (lNear < rNear)
+                        {
+                            if (sp + 2 > stack.Length)
+                            {
+                                Node[] newArray = System.Buffers.ArrayPool<Node>.Shared.Rent(stack.Length << 1);
+                                System.Array.Copy(stackArray, newArray, sp);
+                                System.Buffers.ArrayPool<Node>.Shared.Return(stackArray);
+                                stackArray = newArray;
+                                stack = newArray;
+                            }
+                            stack[sp++] = node.Right;
+                            stack[sp++] = node.Left;
+                        }
+                        else
+                        {
+                            if (sp + 2 > stack.Length)
+                            {
+                                Node[] newArray = System.Buffers.ArrayPool<Node>.Shared.Rent(stack.Length << 1);
+                                System.Array.Copy(stackArray, newArray, sp);
+                                System.Buffers.ArrayPool<Node>.Shared.Return(stackArray);
+                                stackArray = newArray;
+                                stack = newArray;
+                            }
+                            stack[sp++] = node.Left;
+                            stack[sp++] = node.Right;
+                        }
+                    }
+                    else if (hitL)
+                    {
+                        if (sp + 1 > stack.Length)
+                        {
+                            Node[] newArray = System.Buffers.ArrayPool<Node>.Shared.Rent(stack.Length << 1);
+                            System.Array.Copy(stackArray, newArray, sp);
+                            System.Buffers.ArrayPool<Node>.Shared.Return(stackArray);
+                            stackArray = newArray;
+                            stack = newArray;
+                        }
+                        stack[sp++] = node.Left;
+                    }
+                    else if (hitR)
+                    {
+                        if (sp + 1 > stack.Length)
+                        {
+                            Node[] newArray = System.Buffers.ArrayPool<Node>.Shared.Rent(stack.Length << 1);
+                            System.Array.Copy(stackArray, newArray, sp);
+                            System.Buffers.ArrayPool<Node>.Shared.Return(stackArray);
+                            stackArray = newArray;
+                            stack = newArray;
+                        }
+                        stack[sp++] = node.Right;
+                    }
+                }
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<Node>.Shared.Return(stackArray);
+            }
+
+            if (hitAnything)
+            {
+                rec = best;
+            }
             return hitAnything;
         }
+
 
         private static Node Build(Item[] arr, int start, int count)
         {
@@ -203,14 +349,21 @@ namespace ConsoleGame.RayTracing.Objects
                 return null;
             }
 
-            if (count == 1)
+            if (count <= TargetLeafSize)
             {
                 Node leaf = new Node();
-                leaf.Leaf = arr[start].Obj;
+                Hittable[] objs = new Hittable[count];
+                AABB box = arr[start].Box;
+                for (int i = 0; i < count; i++)
+                {
+                    objs[i] = arr[start + i].Obj;
+                    box = AABB.Surround(box, arr[start + i].Box);
+                }
+                leaf.Box = box;
+                leaf.Leaf = objs;
+                leaf.LeafCount = count;
                 leaf.Left = null;
                 leaf.Right = null;
-                leaf.Box = arr[start].Box;
-                leaf.LeafId = RuntimeHelpers.GetHashCode(arr[start].Obj);
                 return leaf;
             }
 
@@ -235,8 +388,116 @@ namespace ConsoleGame.RayTracing.Objects
                 axis = 2;
             }
 
-            Array.Sort(arr, start, count, new CentroidComparer(axis));
-            int mid = start + (count >> 1);
+            int splitIndex = -1;
+            float bestCost = float.PositiveInfinity;
+            int bestAxis = axis;
+
+            for (int ax = 0; ax < 3; ax++)
+            {
+                float extent = ax == 0 ? cExt.X : ax == 1 ? cExt.Y : cExt.Z;
+                if (!(extent > 0.0f))
+                {
+                    continue;
+                }
+
+                int[] counts = new int[SAH_Bins];
+                AABB[] bounds = new AABB[SAH_Bins];
+                for (int b = 0; b < SAH_Bins; b++)
+                {
+                    bounds[b].Min = new Vec3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
+                    bounds[b].Max = new Vec3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
+                }
+
+                float cmin = ax == 0 ? cMin.X : ax == 1 ? cMin.Y : cMin.Z;
+                float invExtent = 1.0f / extent;
+                for (int i = start; i < start + count; i++)
+                {
+                    float c = ax == 0 ? arr[i].Centroid.X : ax == 1 ? arr[i].Centroid.Y : arr[i].Centroid.Z;
+                    int b = (int)((c - cmin) * invExtent * (SAH_Bins - 1));
+                    if (b < 0) b = 0; if (b >= SAH_Bins) b = SAH_Bins - 1;
+                    counts[b]++;
+                    bounds[b] = AABB.Surround(bounds[b], arr[i].Box);
+                }
+
+                int[] leftCount = new int[SAH_Bins];
+                int[] rightCount = new int[SAH_Bins];
+                AABB[] leftBounds = new AABB[SAH_Bins];
+                AABB[] rightBounds = new AABB[SAH_Bins];
+
+                AABB acc = new AABB(new Vec3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity), new Vec3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity));
+                int csum = 0;
+                for (int b = 0; b < SAH_Bins; b++)
+                {
+                    acc = AABB.Surround(acc, bounds[b]);
+                    csum += counts[b];
+                    leftBounds[b] = acc;
+                    leftCount[b] = csum;
+                }
+
+                acc = new AABB(new Vec3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity), new Vec3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity));
+                csum = 0;
+                for (int b = SAH_Bins - 1; b >= 0; b--)
+                {
+                    acc = AABB.Surround(acc, bounds[b]);
+                    csum += counts[b];
+                    rightBounds[b] = acc;
+                    rightCount[b] = csum;
+                }
+
+                for (int b = 0; b < SAH_Bins - 1; b++)
+                {
+                    int lc = leftCount[b];
+                    int rc = rightCount[b + 1];
+                    if (lc == 0 || rc == 0)
+                    {
+                        continue;
+                    }
+                    float cost = lc * AABB.SurfaceArea(leftBounds[b]) + rc * AABB.SurfaceArea(rightBounds[b + 1]);
+                    if (cost < bestCost)
+                    {
+                        bestCost = cost;
+                        bestAxis = ax;
+                        splitIndex = b;
+                    }
+                }
+            }
+
+            int mid;
+            if (splitIndex < 0)
+            {
+                Array.Sort(arr, start, count, new CentroidComparer(bestAxis));
+                mid = start + (count >> 1);
+            }
+            else
+            {
+                float cmin = bestAxis == 0 ? cMin.X : bestAxis == 1 ? cMin.Y : cMin.Z;
+                float cext = bestAxis == 0 ? cExt.X : bestAxis == 1 ? cExt.Y : cExt.Z;
+                float invExtent = 1.0f / cext;
+                int i0 = start;
+                int i1 = start + count - 1;
+                while (i0 <= i1)
+                {
+                    float c0 = bestAxis == 0 ? arr[i0].Centroid.X : bestAxis == 1 ? arr[i0].Centroid.Y : arr[i0].Centroid.Z;
+                    int b0 = (int)((c0 - cmin) * invExtent * (SAH_Bins - 1));
+                    if (b0 <= splitIndex)
+                    {
+                        i0++;
+                    }
+                    else
+                    {
+                        Item tmp = arr[i0];
+                        arr[i0] = arr[i1];
+                        arr[i1] = tmp;
+                        i1--;
+                    }
+                }
+                mid = i0;
+                if (mid == start || mid == start + count)
+                {
+                    Array.Sort(arr, start, count, new CentroidComparer(bestAxis));
+                    mid = start + (count >> 1);
+                }
+            }
 
             Node node = new Node();
             node.Left = Build(arr, start, mid - start);
@@ -256,67 +517,33 @@ namespace ConsoleGame.RayTracing.Objects
             }
 
             node.Leaf = null;
-            node.LeafId = 0;
+            node.LeafCount = 0;
             return node;
         }
 
-        private static bool HitNode(Node node, Ray r, float tMin, float tMax, int depth, ref HitRecord rec)
+        private sealed class CentroidComparer : IComparer<Item>
         {
-            if (!node.Box.Hit(r, tMin, tMax))
+            private readonly int axis;
+
+            public CentroidComparer(int axis)
             {
-                return false;
+                this.axis = axis;
             }
 
-            if (node.IsLeaf())
+            public int Compare(Item a, Item b)
             {
-                return node.Leaf.Hit(r, tMin, tMax, ref rec);
-            }
-
-            HitRecord leftRec = default;
-            HitRecord rightRec = default;
-            bool hitLeft = false;
-            bool hitRight = false;
-
-            if (node.Left != null)
-            {
-                hitLeft = HitNode(node.Left, r, tMin, tMax, depth + 1, ref leftRec);
-                if (hitLeft)
+                float ca = axis == 0 ? a.Centroid.X : axis == 1 ? a.Centroid.Y : a.Centroid.Z;
+                float cb = axis == 0 ? b.Centroid.X : axis == 1 ? b.Centroid.Y : b.Centroid.Z;
+                if (ca < cb)
                 {
-                    tMax = leftRec.T;
+                    return -1;
                 }
-            }
-
-            if (node.Right != null)
-            {
-                hitRight = HitNode(node.Right, r, tMin, tMax, depth + 1, ref rightRec);
-            }
-
-            if (hitLeft && hitRight)
-            {
-                if (rightRec.T < leftRec.T)
+                if (ca > cb)
                 {
-                    rec = rightRec;
+                    return 1;
                 }
-                else
-                {
-                    rec = leftRec;
-                }
-                return true;
+                return 0;
             }
-
-            if (hitLeft)
-            {
-                rec = leftRec;
-                return true;
-            }
-
-            if (hitRight)
-            {
-                rec = rightRec;
-                return true;
-            }
-
-            return false;
         }
 
         private static bool TryComputeBounds(Hittable h, out AABB box, out Vec3 centroid)

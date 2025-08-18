@@ -65,13 +65,6 @@ namespace ConsoleGame.Renderer
 
         public void Render()
         {
-            if (Console.WindowWidth != consoleWidth || Console.WindowHeight - 1 != consoleHeight)
-            {
-                consoleWidth = Console.WindowWidth;
-                consoleHeight = Console.WindowHeight - 1;
-                backBuffer = new CHAR_INFO[consoleWidth * consoleHeight];
-            }
-
             for (int y = 0; y < consoleHeight; y++)
             {
                 for (int x = 0; x < consoleWidth; x++)

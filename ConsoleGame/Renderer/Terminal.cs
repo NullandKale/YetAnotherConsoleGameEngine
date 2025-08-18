@@ -7,7 +7,7 @@ namespace ConsoleGame.Renderer
 {
     public class Terminal
     {
-        private TerminalRenderer renderer;
+        private Win32TerminalRenderer renderer;
         private TerminalInput input;
         private bool isRunning;
         private Stopwatch stopwatch;
@@ -17,9 +17,9 @@ namespace ConsoleGame.Renderer
 
         public Terminal()
         {
-            renderer = new TerminalRenderer();
+            //renderer = new TerminalRenderer();
             //renderer = new ANSITerminalRenderer();
-            //renderer = new Win32TerminalRenderer();
+            renderer = new Win32TerminalRenderer();
             input = new TerminalInput();
             isRunning = false;
             stopwatch = new Stopwatch();

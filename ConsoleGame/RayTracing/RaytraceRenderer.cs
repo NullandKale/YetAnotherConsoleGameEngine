@@ -1,7 +1,9 @@
 ﻿using ConsoleGame.RayTracing.Scenes;
 using ConsoleGame.Renderer;
+using ConsoleGame.Threads;
 using ConsoleRayTracing;
 using System;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -18,14 +20,9 @@ namespace ConsoleGame.RayTracing
         private readonly int fbW;
         private readonly int fbH;
 
-        private readonly Chexel[][,] buffers = new Chexel[2][,];
-        private int frontIndex = 0;
-        private int backIndex = 1;
+        private Chexel[,] frameBuffer;
+        private Chexel[,] prevFrameBuffer;
 
-        private readonly AutoResetEvent evtFrameReady = new AutoResetEvent(false);
-        private readonly AutoResetEvent evtFlipDone = new AutoResetEvent(false);
-        private volatile bool runRenderLoop = true;
-        private Thread renderThread;
         private long frameCounter = 0;
 
         private readonly object camLock = new object();
@@ -86,8 +83,11 @@ namespace ConsoleGame.RayTracing
         private float prevFovDeg = 0.0f;
         private float prevAspect = 1.0f;
 
+        private FixedThreadFor threadpool;
+
         public RaytraceRenderer(Framebuffer framebuffer, Scene scene, float fovDeg, int pxW, int pxH, int superSample)
         {
+            threadpool = new FixedThreadFor(Environment.ProcessorCount, "Render Threads");
             this.scene = scene;
             this.fovDeg = fovDeg;
             hiW = pxW;
@@ -97,8 +97,8 @@ namespace ConsoleGame.RayTracing
             fbW = framebuffer.Width;
             fbH = framebuffer.Height;
 
-            buffers[0] = new Chexel[fbW, fbH];
-            buffers[1] = new Chexel[fbW, fbH];
+            frameBuffer = new Chexel[fbW, fbH];
+            prevFrameBuffer = new Chexel[fbW, fbH];
 
             accumBaseTop = new Vec3[fbW, fbH];
             accumBaseBot = new Vec3[fbW, fbH];
@@ -114,14 +114,9 @@ namespace ConsoleGame.RayTracing
             topHitPos = new Vec3[fbW, fbH];
             botHitPos = new Vec3[fbW, fbH];
 
-            taa = new TaaAccumulator(true, fbW, fbH, ss, 0.65f);
+            taa = new TaaAccumulator(true, fbW, fbH, ss, 0.85f);
 
             scene.RebuildBVH();
-
-            renderThread = new Thread(RenderLoop);
-            renderThread.IsBackground = true;
-            renderThread.Name = "Raytrace-RenderLoop";
-            renderThread.Start();
         }
 
         public void SetCamera(Vec3 pos, float yaw, float pitch)
@@ -142,240 +137,237 @@ namespace ConsoleGame.RayTracing
 
         public void TryFlipAndBlit(Framebuffer fb)
         {
-            if (evtFrameReady.WaitOne(0))
+            float aspect = hiW / (float)hiH;
+
+            Vec3 camPosSnapshot;
+            float yawSnapshot;
+            float pitchSnapshot;
+            lock (camLock)
             {
-                int newFront = backIndex;
-                int newBack = frontIndex;
-                frontIndex = newFront;
-                backIndex = newBack;
-                evtFlipDone.Set();
+                camPosSnapshot = camPos;
+                yawSnapshot = yaw;
+                pitchSnapshot = pitch;
             }
 
-            Chexel[,] front = buffers[frontIndex];
-            for (int cy = 0; cy < fbH; cy++)
+            Camera cam = BuildCamera(camPosSnapshot, yawSnapshot, pitchSnapshot, fovDeg, aspect);
+
+            int procCount = Math.Max(1, Environment.ProcessorCount);
+            long frame = Interlocked.Increment(ref frameCounter);
+
+            Chexel[,] target = frameBuffer;
+            Chexel[,] prev = prevFrameBuffer;
+
+            int jx, jy;
+            taa.GetJitter(out jx, out jy);
+
+            // Phase 1: path trace base/add, write raw buffers, and record primary hit positions (parallel).
+            threadpool.For(0, procCount, worker =>
             {
-                for (int cx = 0; cx < fbW; cx++)
+                int yStart = worker * fbH / procCount;
+                int yEnd = (worker + 1) * fbH / procCount;
+
+                for (int cy = yStart; cy < yEnd; cy++)
                 {
-                    fb.SetChexel(cx, cy, front[cx, cy]);
-                }
-            }
-        }
+                    int yTopPx0 = cy * 2 * ss;
+                    int yBotPx0 = (cy * 2 + 1) * ss;
 
-        private void RenderLoop()
-        {
-            try
-            {
-                while (runRenderLoop)
-                {
-                    float aspect = hiW / (float)hiH;
-
-                    Vec3 camPosSnapshot;
-                    float yawSnapshot;
-                    float pitchSnapshot;
-                    lock (camLock)
+                    for (int cx = 0; cx < fbW; cx++)
                     {
-                        camPosSnapshot = camPos;
-                        yawSnapshot = yaw;
-                        pitchSnapshot = pitch;
-                    }
+                        int xPx0 = cx * ss;
 
-                    Camera cam = BuildCamera(camPosSnapshot, yawSnapshot, pitchSnapshot, fovDeg, aspect);
+                        Vec3 baseTopSum = Vec3.Zero;
+                        Vec3 baseBotSum = Vec3.Zero;
+                        Vec3 addTopSum = Vec3.Zero;
+                        Vec3 addBotSum = Vec3.Zero;
+                        bool firstUnstableTop = false;
+                        bool firstUnstableBot = false;
 
-                    int procCount = Math.Max(1, Environment.ProcessorCount);
-                    long frame = Interlocked.Increment(ref frameCounter);
+                        Rng rng = new Rng(PerFrameSeed(cx, cy, frame, jx, jy));
 
-                    Chexel[,] target = buffers[backIndex];
-                    Chexel[,] prev = buffers[frontIndex];
-
-                    int jx, jy;
-                    taa.GetJitter(out jx, out jy);
-
-                    Parallel.For(0, procCount, worker =>
-                    {
-                        int yStart = worker * fbH / procCount;
-                        int yEnd = (worker + 1) * fbH / procCount;
-
-                        for (int cy = yStart; cy < yEnd; cy++)
+                        for (int syi = 0; syi < ss; syi++)
                         {
-                            int yTopPx0 = cy * 2 * ss;
-                            int yBotPx0 = (cy * 2 + 1) * ss;
+                            int syTop = ss > 1 ? (syi + jy) % ss : syi;
+                            int yTopPx = yTopPx0 + syTop;
 
-                            for (int cx = 0; cx < fbW; cx++)
+                            int syBot = ss > 1 ? (syi + jy) % ss : syi;
+                            int yBotPx = yBotPx0 + syBot;
+
+                            for (int sxi = 0; sxi < ss; sxi++)
                             {
-                                int xPx0 = cx * ss;
+                                int sx = ss > 1 ? (sxi + jx) % ss : sxi;
+                                int xPx = xPx0 + sx;
 
-                                Vec3 baseTopSum = Vec3.Zero;
-                                Vec3 baseBotSum = Vec3.Zero;
-                                Vec3 addTopSum = Vec3.Zero;
-                                Vec3 addBotSum = Vec3.Zero;
-                                bool firstUnstableTop = false;
-                                bool firstUnstableBot = false;
+                                bool uTop = false;
+                                Vec3 bTop, aTop;
+                                FirstHitAndAdd(scene, cam.MakeRay(xPx, yTopPx, hiW, hiH), ref rng, out bTop, out aTop, ref uTop);
+                                if (uTop) firstUnstableTop = true;
+                                baseTopSum = baseTopSum + bTop;
+                                addTopSum = addTopSum + aTop;
 
-                                Rng rng = new Rng(PerFrameSeed(cx, cy, frame, jx, jy));
+                                bool uBot = false;
+                                Vec3 bBot, aBot;
+                                FirstHitAndAdd(scene, cam.MakeRay(xPx, yBotPx, hiW, hiH), ref rng, out bBot, out aBot, ref uBot);
+                                if (uBot) firstUnstableBot = true;
+                                baseBotSum = baseBotSum + bBot;
+                                addBotSum = addBotSum + aBot;
+                            }
+                        }
 
-                                for (int syi = 0; syi < ss; syi++)
+                        float inv = 1.0f / (ss * ss);
+                        Vec3 baseTopAvg = new Vec3(baseTopSum.X * inv, baseTopSum.Y * inv, baseTopSum.Z * inv);
+                        Vec3 baseBotAvg = new Vec3(baseBotSum.X * inv, baseBotSum.Y * inv, baseBotSum.Z * inv);
+                        Vec3 addTopAvg = new Vec3(addTopSum.X * inv, addTopSum.Y * inv, addTopSum.Z * inv);
+                        Vec3 addBotAvg = new Vec3(addBotSum.X * inv, addBotSum.Y * inv, addBotSum.Z * inv);
+
+                        baseTopAvg = ClampLuminance(baseTopAvg, MaxLuminance).Saturate();
+                        baseBotAvg = ClampLuminance(baseBotAvg, MaxLuminance).Saturate();
+                        addTopAvg = ClampLuminance(addTopAvg, MaxLuminance).Saturate();
+                        addBotAvg = ClampLuminance(addBotAvg, MaxLuminance).Saturate();
+
+                        rawBaseTop[cx, cy] = baseTopAvg;
+                        rawBaseBot[cx, cy] = baseBotAvg;
+                        addTop[cx, cy] = addTopAvg;
+                        addBot[cx, cy] = addBotAvg;
+                        unstableTop[cx, cy] = firstUnstableTop;
+                        unstableBot[cx, cy] = firstUnstableBot;
+
+                        int xCenter = xPx0 + ss / 2;
+                        int yCenterTop = yTopPx0 + ss / 2;
+                        int yCenterBot = yBotPx0 + ss / 2;
+
+                        Vec3 hp;
+                        if (TryPrimaryHitPosition(scene, cam.MakeRay(xCenter, yCenterTop, hiW, hiH), out hp))
+                        {
+                            topHitValid[cx, cy] = true;
+                            topHitPos[cx, cy] = hp;
+                        }
+                        else
+                        {
+                            topHitValid[cx, cy] = false;
+                        }
+
+                        if (TryPrimaryHitPosition(scene, cam.MakeRay(xCenter, yCenterBot, hiW, hiH), out hp))
+                        {
+                            botHitValid[cx, cy] = true;
+                            botHitPos[cx, cy] = hp;
+                        }
+                        else
+                        {
+                            botHitValid[cx, cy] = false;
+                        }
+                    }
+                }
+            });
+
+            // Snapshot previous-camera state for reprojection (stable across Phase 2 threads).
+            bool prevValidSnap = prevCamValid;
+            Vec3 prevPosSnap = prevCamPos;
+            float prevYawSnap = prevYaw;
+            float prevPitchSnap = prevPitch;
+            float prevFovSnap = prevFovDeg;
+            float prevAspectSnap = prevAspect;
+
+            // Phase 2: TAA reprojection + accumulation + palette quantization into target (parallel).
+            threadpool.For(0, procCount, worker =>
+            {
+                int yStart = worker * fbH / procCount;
+                int yEnd = (worker + 1) * fbH / procCount;
+
+                for (int cy = yStart; cy < yEnd; cy++)
+                {
+                    for (int cx = 0; cx < fbW; cx++)
+                    {
+                        bool havePrevTop = false;
+                        bool havePrevBot = false;
+                        float pTopR = 0.0f, pTopG = 0.0f, pTopB = 0.0f;
+                        float pBotR = 0.0f, pBotG = 0.0f, pBotB = 0.0f;
+
+                        if (prevValidSnap)
+                        {
+                            if (topHitValid[cx, cy])
+                            {
+                                float uPrev, vPrev;
+                                if (ProjectToUV(topHitPos[cx, cy], prevPosSnap, prevYawSnap, prevPitchSnap, prevFovSnap, prevAspectSnap, out uPrev, out vPrev))
                                 {
-                                    int syTop = ss > 1 ? (syi + jy) % ss : syi;
-                                    int yTopPx = yTopPx0 + syTop;
-
-                                    int syBot = ss > 1 ? (syi + jy) % ss : syi;
-                                    int yBotPx = yBotPx0 + syBot;
-
-                                    for (int sxi = 0; sxi < ss; sxi++)
-                                    {
-                                        int sx = ss > 1 ? (sxi + jx) % ss : sxi;
-                                        int xPx = xPx0 + sx;
-
-                                        bool uTop = false;
-                                        Vec3 bTop, aTop;
-                                        FirstHitAndAdd(scene, cam.MakeRay(xPx, yTopPx, hiW, hiH), ref rng, out bTop, out aTop, ref uTop);
-                                        if (uTop) firstUnstableTop = true;
-                                        baseTopSum = baseTopSum + bTop;
-                                        addTopSum = addTopSum + aTop;
-
-                                        bool uBot = false;
-                                        Vec3 bBot, aBot;
-                                        FirstHitAndAdd(scene, cam.MakeRay(xPx, yBotPx, hiW, hiH), ref rng, out bBot, out aBot, ref uBot);
-                                        if (uBot) firstUnstableBot = true;
-                                        baseBotSum = baseBotSum + bBot;
-                                        addBotSum = addBotSum + aBot;
-                                    }
+                                    float xPrev = uPrev * (fbW - 1);
+                                    float yPrev = vPrev * (fbH - 1);
+                                    taa.SamplePrevTop(xPrev, yPrev, out pTopR, out pTopG, out pTopB);
+                                    Vec3 prevBase = new Vec3(pTopR, pTopG, pTopB);
+                                    Vec3 minN, maxN;
+                                    NeighborhoodMinMax(rawBaseTop, cx, cy, out minN, out maxN);
+                                    Vec3 clipped = ClipAABB(minN, maxN, prevBase);
+                                    pTopR = clipped.X; pTopG = clipped.Y; pTopB = clipped.Z;
+                                    havePrevTop = true;
                                 }
-
-                                float inv = 1.0f / (ss * ss);
-                                Vec3 baseTopAvg = new Vec3(baseTopSum.X * inv, baseTopSum.Y * inv, baseTopSum.Z * inv);
-                                Vec3 baseBotAvg = new Vec3(baseBotSum.X * inv, baseBotSum.Y * inv, baseBotSum.Z * inv);
-                                Vec3 addTopAvg = new Vec3(addTopSum.X * inv, addTopSum.Y * inv, addTopSum.Z * inv);
-                                Vec3 addBotAvg = new Vec3(addBotSum.X * inv, addBotSum.Y * inv, addBotSum.Z * inv);
-
-                                baseTopAvg = ClampLuminance(baseTopAvg, MaxLuminance).Saturate();
-                                baseBotAvg = ClampLuminance(baseBotAvg, MaxLuminance).Saturate();
-                                addTopAvg = ClampLuminance(addTopAvg, MaxLuminance).Saturate();
-                                addBotAvg = ClampLuminance(addBotAvg, MaxLuminance).Saturate();
-
-                                rawBaseTop[cx, cy] = baseTopAvg;
-                                rawBaseBot[cx, cy] = baseBotAvg;
-                                addTop[cx, cy] = addTopAvg;
-                                addBot[cx, cy] = addBotAvg;
-                                unstableTop[cx, cy] = firstUnstableTop;
-                                unstableBot[cx, cy] = firstUnstableBot;
-
-                                int xCenter = xPx0 + ss / 2;
-                                int yCenterTop = yTopPx0 + ss / 2;
-                                int yCenterBot = yBotPx0 + ss / 2;
-
-                                Vec3 hp;
-                                if (TryPrimaryHitPosition(scene, cam.MakeRay(xCenter, yCenterTop, hiW, hiH), out hp))
+                            }
+                            if (botHitValid[cx, cy])
+                            {
+                                float uPrev, vPrev;
+                                if (ProjectToUV(botHitPos[cx, cy], prevPosSnap, prevYawSnap, prevPitchSnap, prevFovSnap, prevAspectSnap, out uPrev, out vPrev))
                                 {
-                                    topHitValid[cx, cy] = true;
-                                    topHitPos[cx, cy] = hp;
-                                }
-                                else
-                                {
-                                    topHitValid[cx, cy] = false;
-                                }
-
-                                if (TryPrimaryHitPosition(scene, cam.MakeRay(xCenter, yCenterBot, hiW, hiH), out hp))
-                                {
-                                    botHitValid[cx, cy] = true;
-                                    botHitPos[cx, cy] = hp;
-                                }
-                                else
-                                {
-                                    botHitValid[cx, cy] = false;
+                                    float xPrev = uPrev * (fbW - 1);
+                                    float yPrev = vPrev * (fbH - 1);
+                                    taa.SamplePrevBot(xPrev, yPrev, out pBotR, out pBotG, out pBotB);
+                                    Vec3 prevBase = new Vec3(pBotR, pBotG, pBotB);
+                                    Vec3 minN, maxN;
+                                    NeighborhoodMinMax(rawBaseBot, cx, cy, out minN, out maxN);
+                                    Vec3 clipped = ClipAABB(minN, maxN, prevBase);
+                                    pBotR = clipped.X; pBotG = clipped.Y; pBotB = clipped.Z;
+                                    havePrevBot = true;
                                 }
                             }
                         }
-                    });
 
-                    for (int cy = 0; cy < fbH; cy++)
-                    {
-                        for (int cx = 0; cx < fbW; cx++)
-                        {
-                            bool havePrevTop = false;
-                            bool havePrevBot = false;
-                            float pTopR = 0.0f, pTopG = 0.0f, pTopB = 0.0f;
-                            float pBotR = 0.0f, pBotG = 0.0f, pBotB = 0.0f;
+                        float alphaTop = unstableTop[cx, cy] ? 1.0f : taa.Alpha;
+                        float alphaBot = unstableBot[cx, cy] ? 1.0f : taa.Alpha;
 
-                            if (prevCamValid)
-                            {
-                                if (topHitValid[cx, cy])
-                                {
-                                    float uPrev, vPrev;
-                                    if (ProjectToUV(topHitPos[cx, cy], prevCamPos, prevYaw, prevPitch, prevFovDeg, prevAspect, out uPrev, out vPrev))
-                                    {
-                                        float xPrev = uPrev * (fbW - 1);
-                                        float yPrev = vPrev * (fbH - 1);
-                                        taa.SamplePrevTop(xPrev, yPrev, out pTopR, out pTopG, out pTopB);
-                                        Vec3 prevBase = new Vec3(pTopR, pTopG, pTopB);
-                                        Vec3 minN, maxN;
-                                        NeighborhoodMinMax(rawBaseTop, cx, cy, out minN, out maxN);
-                                        Vec3 clipped = ClipAABB(minN, maxN, prevBase);
-                                        pTopR = clipped.X; pTopG = clipped.Y; pTopB = clipped.Z;
-                                        havePrevTop = true;
-                                    }
-                                }
-                                if (botHitValid[cx, cy])
-                                {
-                                    float uPrev, vPrev;
-                                    if (ProjectToUV(botHitPos[cx, cy], prevCamPos, prevYaw, prevPitch, prevFovDeg, prevAspect, out uPrev, out vPrev))
-                                    {
-                                        float xPrev = uPrev * (fbW - 1);
-                                        float yPrev = vPrev * (fbH - 1);
-                                        taa.SamplePrevBot(xPrev, yPrev, out pBotR, out pBotG, out pBotB);
-                                        Vec3 prevBase = new Vec3(pBotR, pBotG, pBotB);
-                                        Vec3 minN, maxN;
-                                        NeighborhoodMinMax(rawBaseBot, cx, cy, out minN, out maxN);
-                                        Vec3 clipped = ClipAABB(minN, maxN, prevBase);
-                                        pBotR = clipped.X; pBotG = clipped.Y; pBotB = clipped.Z;
-                                        havePrevBot = true;
-                                    }
-                                }
-                            }
+                        float outBaseTopR, outBaseTopG, outBaseTopB, outBaseBotR, outBaseBotG, outBaseBotB;
+                        taa.AccumulateReprojected(cx, cy, rawBaseTop[cx, cy].X, rawBaseTop[cx, cy].Y, rawBaseTop[cx, cy].Z, rawBaseBot[cx, cy].X, rawBaseBot[cx, cy].Y, rawBaseBot[cx, cy].Z, havePrevTop, pTopR, pTopG, pTopB, havePrevBot, pBotR, pBotG, pBotB, alphaTop, alphaBot, out outBaseTopR, out outBaseTopG, out outBaseTopB, out outBaseBotR, out outBaseBotG, out outBaseBotB);
 
-                            float alphaTop = unstableTop[cx, cy] ? 1.0f : taa.Alpha;
-                            float alphaBot = unstableBot[cx, cy] ? 1.0f : taa.Alpha;
+                        Vec3 topSRGB = new Vec3(outBaseTopR + addTop[cx, cy].X, outBaseTopG + addTop[cx, cy].Y, outBaseTopB + addTop[cx, cy].Z).Saturate();
+                        Vec3 botSRGB = new Vec3(outBaseBotR + addBot[cx, cy].X, outBaseBotG + addBot[cx, cy].Y, outBaseBotB + addBot[cx, cy].Z).Saturate();
 
-                            float outBaseTopR, outBaseTopG, outBaseTopB, outBaseBotR, outBaseBotG, outBaseBotB;
-                            taa.AccumulateReprojected(cx, cy, rawBaseTop[cx, cy].X, rawBaseTop[cx, cy].Y, rawBaseTop[cx, cy].Z, rawBaseBot[cx, cy].X, rawBaseBot[cx, cy].Y, rawBaseBot[cx, cy].Z, havePrevTop, pTopR, pTopG, pTopB, havePrevBot, pBotR, pBotG, pBotB, alphaTop, alphaBot, out outBaseTopR, out outBaseTopG, out outBaseTopB, out outBaseBotR, out outBaseBotG, out outBaseBotB);
+                        accumBaseTop[cx, cy] = topSRGB;
+                        accumBaseBot[cx, cy] = botSRGB;
 
-                            Vec3 topSRGB = new Vec3(outBaseTopR + addTop[cx, cy].X, outBaseTopG + addTop[cx, cy].Y, outBaseTopB + addTop[cx, cy].Z).Saturate();
-                            Vec3 botSRGB = new Vec3(outBaseBotR + addBot[cx, cy].X, outBaseBotG + addBot[cx, cy].Y, outBaseBotB + addBot[cx, cy].Z).Saturate();
-
-                            accumBaseTop[cx, cy] = topSRGB;
-                            accumBaseBot[cx, cy] = botSRGB;
-                        }
+                        ConsoleColor prevFg = prev[cx, cy].ForegroundColor;
+                        ConsoleColor prevBg = prev[cx, cy].BackgroundColor;
+                        ConsoleColor fg = NearestWithHysteresis(accumBaseTop[cx, cy], prevFg, PaletteHysteresis);
+                        ConsoleColor bg = NearestWithHysteresis(accumBaseBot[cx, cy], prevBg, PaletteHysteresis);
+                        target[cx, cy] = new Chexel('▀', fg, bg);
                     }
-
-                    for (int cy = 0; cy < fbH; cy++)
-                    {
-                        for (int cx = 0; cx < fbW; cx++)
-                        {
-                            ConsoleColor prevFg = prev[cx, cy].ForegroundColor;
-                            ConsoleColor prevBg = prev[cx, cy].BackgroundColor;
-                            ConsoleColor fg = NearestWithHysteresis(accumBaseTop[cx, cy], prevFg, PaletteHysteresis);
-                            ConsoleColor bg = NearestWithHysteresis(accumBaseBot[cx, cy], prevBg, PaletteHysteresis);
-                            target[cx, cy] = new Chexel('▀', fg, bg);
-                        }
-                    }
-
-                    taa.EndFrame();
-
-                    prevCamPos = camPosSnapshot;
-                    prevYaw = yawSnapshot;
-                    prevPitch = pitchSnapshot;
-                    prevFovDeg = fovDeg;
-                    prevAspect = aspect;
-                    prevCamValid = true;
-
-                    evtFrameReady.Set();
-                    evtFlipDone.WaitOne();
                 }
-            }
-            catch
+            });
+
+            // Phase 3: blit the prepared chexels to the framebuffer (parallel).
+            threadpool.For(0, procCount, worker =>
             {
-            }
+                int yStart = worker * fbH / procCount;
+                int yEnd = (worker + 1) * fbH / procCount;
+
+                for (int cy = yStart; cy < yEnd; cy++)
+                {
+                    for (int cx = 0; cx < fbW; cx++)
+                    {
+                        fb.SetChexel(cx, cy, target[cx, cy]);
+                    }
+                }
+            });
+
+            taa.EndFrame();
+
+            prevCamPos = camPosSnapshot;
+            prevYaw = yawSnapshot;
+            prevPitch = pitchSnapshot;
+            prevFovDeg = fovDeg;
+            prevAspect = aspect;
+            prevCamValid = true;
+
+            Chexel[,] tmp = prevFrameBuffer;
+            prevFrameBuffer = frameBuffer;
+            frameBuffer = tmp;
         }
+
 
         public void SetTaaEnabled(bool enabled)
         {
@@ -637,17 +629,53 @@ namespace ConsoleGame.RayTracing
             return new Vec3(c.X * s, c.Y * s, c.Z * s);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static ConsoleColor NearestWithHysteresis(Vec3 srgb, ConsoleColor prev, float hysteresis)
         {
-            ConsoleColor cand = ConsolePalette.NearestColor(srgb);
-            if (cand == prev) return prev;
-            Vec3 prevRGB = FromConsole(prev);
-            Vec3 candRGB = FromConsole(cand);
-            float dPrev2 = Dist2(srgb, prevRGB);
-            float dCand2 = Dist2(srgb, candRGB);
+            float r = srgb.X, g = srgb.Y, b = srgb.Z;
+
+            int prevIdx = (int)prev;
+            if ((uint)prevIdx >= (uint)Palette16.Length) prevIdx = 0;
+
+            Vec3 pPrev = Palette16[prevIdx];
+            float dpr = r - pPrev.X;
+            float dpg = g - pPrev.Y;
+            float dpb = b - pPrev.Z;
+            float dPrev2 = dpr * dpr + dpg * dpg + dpb * dpb;
+
             float h2 = hysteresis * hysteresis;
-            if (dCand2 + h2 >= dPrev2) return prev;
-            return cand;
+
+            int bestIdx = prevIdx;
+            float bestD = dPrev2;
+
+            for (int i = 0; i < Palette16.Length; i++)
+            {
+                if (i == prevIdx) continue;
+
+                Vec3 p = Palette16[i];
+                float dr = r - p.X;
+                float dg = g - p.Y;
+                float db = b - p.Z;
+                float d = dr * dr + dg * dg + db * db;
+
+                if (d < bestD)
+                {
+                    bestD = d;
+                    bestIdx = i;
+
+                    if (bestD + h2 < dPrev2)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (bestIdx != prevIdx && bestD + h2 >= dPrev2)
+            {
+                return prev;
+            }
+
+            return (ConsoleColor)bestIdx;
         }
 
         private static Vec3 FromConsole(ConsoleColor c)

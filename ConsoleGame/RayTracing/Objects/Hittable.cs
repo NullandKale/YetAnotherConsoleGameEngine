@@ -334,59 +334,6 @@ namespace ConsoleGame.RayTracing.Objects
         }
     }
 
-    public sealed class Triangle : Hittable
-    {
-        public Vec3 A;
-        public Vec3 B;
-        public Vec3 C;
-        public Material Mat;
-
-        public Triangle(Vec3 a, Vec3 b, Vec3 c, Material mat)
-        {
-            A = a;
-            B = b;
-            C = c;
-            Mat = mat;
-        }
-
-        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec)
-        {
-            Vec3 e1 = B - A;
-            Vec3 e2 = C - A;
-            Vec3 pvec = r.Dir.Cross(e2);
-            float det = e1.Dot(pvec);
-            if (Math.Abs(det) < 1e-8)
-            {
-                return false;
-            }
-            float invDet = 1.0f / det;
-            Vec3 tvec = r.Origin - A;
-            float u = tvec.Dot(pvec) * invDet;
-            if (u < 0.0f || u > 1.0f)
-            {
-                return false;
-            }
-            Vec3 qvec = tvec.Cross(e1);
-            float v = r.Dir.Dot(qvec) * invDet;
-            if (v < 0.0f || u + v > 1.0f)
-            {
-                return false;
-            }
-            float t = e2.Dot(qvec) * invDet;
-            if (t < tMin || t > tMax)
-            {
-                return false;
-            }
-            rec.T = t;
-            rec.P = r.At(t);
-            Vec3 n = e1.Cross(e2).Normalized();
-            rec.N = n.Dot(r.Dir) < 0.0f ? n : -n;
-            rec.Mat = Mat;
-            rec.U = u;
-            rec.V = v;
-            return true;
-        }
-    }
 
     public sealed class CylinderY : Hittable
     {

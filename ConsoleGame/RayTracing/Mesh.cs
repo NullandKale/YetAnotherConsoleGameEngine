@@ -12,13 +12,14 @@ namespace ConsoleGame.RayTracing
         public readonly Vec3 BoundsMin;
         public readonly Vec3 BoundsMax;
 
-        private readonly BVH bvh; // local BVH over triangles
+        private readonly Hittable bvh; // local BVH over triangles
 
         private Mesh(List<Triangle> triangles, Vec3 min, Vec3 max)
         {
             BoundsMin = min;
             BoundsMax = max;
-            bvh = new BVH(triangles);
+            bvh = new MeshBVH(triangles);
+            //bvh = new BVH(triangles);
         }
 
         public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec)

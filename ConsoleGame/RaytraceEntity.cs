@@ -52,7 +52,7 @@ namespace ConsoleRayTracing
             float moveSpeed = 3.0f;
             float rotSpeed = 1.8f;
 
-            if(keyInfo.Modifiers == ConsoleModifiers.Shift)
+            if (keyInfo.Modifiers == ConsoleModifiers.Shift)
             {
                 moveSpeed *= 2;
                 rotSpeed *= 2;
@@ -215,27 +215,27 @@ namespace ConsoleRayTracing
 
         private static int DefaultSceneIndex()
         {
-            return 0;
+            return 11;
         }
 
         private static Func<Scene>[] BuildSceneTable()
         {
             List<Func<Scene>> list = new List<Func<Scene>>();
 
-            list.Add(() => Scenes.BuildTestScene());
-            list.Add(() => Scenes.BuildDemoScene());
-            list.Add(() => Scenes.BuildCornellBox());
-            list.Add(() => Scenes.BuildMirrorSpheresOnChecker());
-            list.Add(() => Scenes.BuildCylindersDisksAndTriangles());
-            list.Add(() => Scenes.BuildBoxesShowcase());
-            list.Add(() => Scenes.BuildVolumeGridTestScene());
-            list.Add(() => MeshScenes.BuildAllMeshesScene());
-            list.Add(() => MeshScenes.BuildBunnyScene());
-            list.Add(() => MeshScenes.BuildTeapotScene());
-            list.Add(() => MeshScenes.BuildCowScene());
-            list.Add(() => MeshScenes.BuildDragonScene());
-            list.Add(() => VolumeScenes.BuildMinecraftLike("test.bin"));
-            
+            list.Add(() => Scenes.BuildTestScene()); // 0
+            list.Add(() => Scenes.BuildDemoScene()); // 1
+            list.Add(() => Scenes.BuildCornellBox()); // 2
+            list.Add(() => Scenes.BuildMirrorSpheresOnChecker()); // 3
+            list.Add(() => Scenes.BuildCylindersDisksAndTriangles()); // 4
+            list.Add(() => Scenes.BuildBoxesShowcase()); // 5
+            list.Add(() => Scenes.BuildVolumeGridTestScene()); // 6
+            list.Add(() => MeshScenes.BuildAllMeshesScene()); // 7
+            list.Add(() => MeshScenes.BuildBunnyScene()); // 8
+            list.Add(() => MeshScenes.BuildTeapotScene()); // 9
+            list.Add(() => MeshScenes.BuildCowScene()); // 10
+            list.Add(() => MeshScenes.BuildDragonScene()); // 11
+            //list.Add(() => VolumeScenes.BuildMinecraftLike("test.bin"));
+
             return list.ToArray();
         }
     }
