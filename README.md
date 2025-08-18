@@ -6,6 +6,11 @@ A real-time CPU ray tracer that renders to a text console.
 
 I have written this code a few times, and this is probably the most complete it has ever gotten. 
 
+On Behest of the reddit comments I implemented a renderer that uses PInvoke to directly write into the terminal memory buffer, and a renderer that uses ANSI color codes.
+
+Example video of the ANSITerminalRenderer providing a MASSIVE speedup, the PInvoke is about the same speed but plays less nicely with the debug text printing.
+<video src="Assets/RTConsole.mp4" controls width="720"></video>
+
 ---
 
 ## TL;DR
