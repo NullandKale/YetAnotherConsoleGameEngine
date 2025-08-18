@@ -2,6 +2,7 @@
 using ConsoleGame.Components;
 using ConsoleGame.Entities;
 using ConsoleGame.RayTracing;
+using ConsoleGame.RayTracing.Objects;
 using ConsoleGame.RayTracing.Scenes;
 using ConsoleGame.Renderer;
 using System;
@@ -160,7 +161,7 @@ namespace ConsoleRayTracing
 
         public string GetInfoString()
         {
-            return $"pos=({camPos.X:0.###},{camPos.Y:0.###},{camPos.Z:0.###}) yaw={yaw:0.###} pitch={pitch:0.###} scene={sceneIndex}";
+            return $"pos=({camPos.X:0.###},{camPos.Y:0.###},{camPos.Z:0.###}) yaw={yaw:0.###} pitch={pitch:0.###} scene={sceneIndex} objs={activeScene.Objects.Count} tris={MeshBVH.counter}   ";
         }
 
         public override void Update(double deltaTime)

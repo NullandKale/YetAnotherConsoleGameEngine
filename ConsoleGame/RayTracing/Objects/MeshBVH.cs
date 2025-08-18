@@ -9,6 +9,7 @@ namespace ConsoleGame.RayTracing.Objects
 {
     public sealed class MeshBVH : Hittable
     {
+        public static int counter = 0;
         private const int TargetLeafSize = 4;
         private const int SAH_Bins = 16;
 
@@ -38,6 +39,7 @@ namespace ConsoleGame.RayTracing.Objects
 
         public MeshBVH(IEnumerable<Triangle> objects)
         {
+            counter = counter + objects.Count();
             List<Triangle> tris = new List<Triangle>();
             List<Item> items = new List<Item>();
 
