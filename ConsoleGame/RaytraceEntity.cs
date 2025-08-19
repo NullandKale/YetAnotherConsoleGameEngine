@@ -216,7 +216,7 @@ namespace ConsoleRayTracing
 
         private static int DefaultSceneIndex()
         {
-            return 11;
+            return 0;
         }
 
         private static Func<Scene>[] BuildSceneTable()
@@ -235,7 +235,7 @@ namespace ConsoleRayTracing
             list.Add(() => MeshScenes.BuildTeapotScene()); // 9
             list.Add(() => MeshScenes.BuildCowScene()); // 10
             list.Add(() => MeshScenes.BuildDragonScene()); // 11
-            //list.Add(() => VolumeScenes.BuildMinecraftLike("test.bin"));
+            list.Add(() => VolumeScenes.BuildMinecraftLike());
 
             return list.ToArray();
         }

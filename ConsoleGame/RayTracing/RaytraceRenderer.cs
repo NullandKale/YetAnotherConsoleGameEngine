@@ -30,7 +30,7 @@ namespace ConsoleGame.RayTracing
         private float yaw = 0.0f;
         private float pitch = 0.0f;
 
-        private const int DiffuseBounces = 1;
+        private const int DiffuseBounces = 0;
         private const int IndirectSamples = 1;
         private const int MaxMirrorBounces = 2;
         private const float MirrorThreshold = 0.9f;
@@ -114,7 +114,7 @@ namespace ConsoleGame.RayTracing
             topHitPos = new Vec3[fbW, fbH];
             botHitPos = new Vec3[fbW, fbH];
 
-            taa = new TaaAccumulator(true, fbW, fbH, ss, 0.85f);
+            taa = new TaaAccumulator(true, fbW, fbH, ss, 0.50f);
 
             scene.RebuildBVH();
         }
@@ -292,6 +292,8 @@ namespace ConsoleGame.RayTracing
                                     float xPrev = uPrev * (fbW - 1);
                                     float yPrev = vPrev * (fbH - 1);
                                     taa.SamplePrevTop(xPrev, yPrev, out pTopR, out pTopG, out pTopB);
+                                    // Fix: TAA previous buffers are BGR; convert to RGB before clipping/accumulation.
+                                    float tmpTop = pTopR; pTopR = pTopB; pTopB = tmpTop;
                                     Vec3 prevBase = new Vec3(pTopR, pTopG, pTopB);
                                     Vec3 minN, maxN;
                                     NeighborhoodMinMax(rawBaseTop, cx, cy, out minN, out maxN);
@@ -308,6 +310,8 @@ namespace ConsoleGame.RayTracing
                                     float xPrev = uPrev * (fbW - 1);
                                     float yPrev = vPrev * (fbH - 1);
                                     taa.SamplePrevBot(xPrev, yPrev, out pBotR, out pBotG, out pBotB);
+                                    // Fix: TAA previous buffers are BGR; convert to RGB before clipping/accumulation.
+                                    float tmpBot = pBotR; pBotR = pBotB; pBotB = tmpBot;
                                     Vec3 prevBase = new Vec3(pBotR, pBotG, pBotB);
                                     Vec3 minN, maxN;
                                     NeighborhoodMinMax(rawBaseBot, cx, cy, out minN, out maxN);

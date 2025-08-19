@@ -45,19 +45,25 @@ namespace ConsoleGame.RayTracing.Objects
             int stepY = r.Dir.Y > 0.0 ? 1 : r.Dir.Y < 0.0 ? -1 : 0;
             int stepZ = r.Dir.Z > 0.0 ? 1 : r.Dir.Z < 0.0 ? -1 : 0;
 
-            float nextVx = minCorner.X + (stepX > 0 ? (ix + 1) * voxelSize.X : ix * voxelSize.X);
-            float nextVy = minCorner.Y + (stepY > 0 ? (iy + 1) * voxelSize.Y : iy * voxelSize.Y);
-            float nextVz = minCorner.Z + (stepZ > 0 ? (iz + 1) * voxelSize.Z : iz * voxelSize.Z);
+            float nextVx = minCorner.X + (stepX > 0 ? (ix + 1) * (float)voxelSize.X : ix * (float)voxelSize.X);
+            float nextVy = minCorner.Y + (stepY > 0 ? (iy + 1) * (float)voxelSize.Y : iy * (float)voxelSize.Y);
+            float nextVz = minCorner.Z + (stepZ > 0 ? (iz + 1) * (float)voxelSize.Z : iz * (float)voxelSize.Z);
 
-            float tMaxX = stepX == 0 ? float.PositiveInfinity : (nextVx - r.Origin.X) / r.Dir.X;
-            float tMaxY = stepY == 0 ? float.PositiveInfinity : (nextVy - r.Origin.Y) / r.Dir.Y;
-            float tMaxZ = stepZ == 0 ? float.PositiveInfinity : (nextVz - r.Origin.Z) / r.Dir.Z;
+            float tMaxX = stepX == 0 ? float.PositiveInfinity : (nextVx - (float)r.Origin.X) / (float)r.Dir.X;
+            float tMaxY = stepY == 0 ? float.PositiveInfinity : (nextVy - (float)r.Origin.Y) / (float)r.Dir.Y;
+            float tMaxZ = stepZ == 0 ? float.PositiveInfinity : (nextVz - (float)r.Origin.Z) / (float)r.Dir.Z;
 
-            float tDeltaX = stepX == 0 ? float.PositiveInfinity : Math.Abs(voxelSize.X / r.Dir.X);
-            float tDeltaY = stepY == 0 ? float.PositiveInfinity : Math.Abs(voxelSize.Y / r.Dir.Y);
-            float tDeltaZ = stepZ == 0 ? float.PositiveInfinity : Math.Abs(voxelSize.Z / r.Dir.Z);
+            float tDeltaX = stepX == 0 ? float.PositiveInfinity : Math.Abs((float)voxelSize.X / (float)r.Dir.X);
+            float tDeltaY = stepY == 0 ? float.PositiveInfinity : Math.Abs((float)voxelSize.Y / (float)r.Dir.Y);
+            float tDeltaZ = stepZ == 0 ? float.PositiveInfinity : Math.Abs((float)voxelSize.Z / (float)r.Dir.Z);
 
             int lastAxis = enterAxis;
+            if (lastAxis < 0)
+            {
+                lastAxis = AxisOfNextCrossing(t, tMaxX, tMaxY, tMaxZ);
+            }
+
+            const float eps = 1e-6f;
 
             while (t <= tExit && t <= tMax)
             {
@@ -65,12 +71,28 @@ namespace ConsoleGame.RayTracing.Objects
                 {
                     var cell = cells[ix, iy, iz];
                     int matId = cell.Item1;
-                    int metaId = cell.Item2; // placeholder for linking to world objects (e.g., chests)
+                    int metaId = cell.Item2;
                     if (matId > 0)
                     {
-                        Vec3 n = FaceNormalFromAxis(lastAxis, stepX, stepY, stepZ);
+                        int normalAxis;
+                        float hitT;
+                        if (lastAxis >= 0)
+                        {
+                            normalAxis = lastAxis;
+                            hitT = Math.Max(t, tMin);
+                        }
+                        else
+                        {
+                            int axisNext = AxisOfNextCrossing(t, tMaxX, tMaxY, tMaxZ);
+                            if (axisNext < 0) return false;
+                            float tNext = axisNext == 0 ? tMaxX : axisNext == 1 ? tMaxY : tMaxZ;
+                            normalAxis = axisNext;
+                            hitT = Math.Max(tNext, tMin);
+                        }
+
+                        Vec3 n = FaceNormalFromAxis(normalAxis, stepX, stepY, stepZ);
                         Material m = materialLookup(matId, metaId);
-                        rec.T = Math.Max(t, tMin);
+                        rec.T = hitT;
                         rec.P = r.At(rec.T);
                         rec.N = n;
                         rec.Mat = m;
@@ -79,30 +101,35 @@ namespace ConsoleGame.RayTracing.Objects
                         return true;
                     }
                 }
-                if (tMaxX < tMaxY && tMaxX < tMaxZ)
+
+                float tNextCross = Math.Min(tMaxX, Math.Min(tMaxY, tMaxZ));
+                if (tNextCross > tExit || tNextCross > tMax) break;
+
+                bool stepAlongX = stepX != 0 && NearlyEqual(tMaxX, tNextCross, eps);
+                bool stepAlongY = stepY != 0 && NearlyEqual(tMaxY, tNextCross, eps);
+                bool stepAlongZ = stepZ != 0 && NearlyEqual(tMaxZ, tNextCross, eps);
+
+                int chosenAxis = SelectNormalAxis(stepAlongX, stepAlongY, stepAlongZ, r.Dir);
+                if (stepAlongX)
                 {
                     ix += stepX;
-                    t = tMaxX;
                     tMaxX += tDeltaX;
-                    lastAxis = 0;
-                    if (ix < 0 || ix >= nx) break;
                 }
-                else if (tMaxY < tMaxZ)
+                if (stepAlongY)
                 {
                     iy += stepY;
-                    t = tMaxY;
                     tMaxY += tDeltaY;
-                    lastAxis = 1;
-                    if (iy < 0 || iy >= ny) break;
                 }
-                else
+                if (stepAlongZ)
                 {
                     iz += stepZ;
-                    t = tMaxZ;
                     tMaxZ += tDeltaZ;
-                    lastAxis = 2;
-                    if (iz < 0 || iz >= nz) break;
                 }
+
+                t = tNextCross;
+                lastAxis = chosenAxis;
+
+                if (ix < 0 || ix >= nx || iy < 0 || iy >= ny || iz < 0 || iz >= nz) break;
             }
 
             return false;
@@ -129,16 +156,17 @@ namespace ConsoleGame.RayTracing.Objects
             tExit = float.PositiveInfinity;
             enterAxis = -1;
 
-            if (!Slab(r.Origin.X, r.Dir.X, bmin.X, bmax.X, ref tEnter, ref tExit, 0, ref enterAxis)) return false;
-            if (!Slab(r.Origin.Y, r.Dir.Y, bmin.Y, bmax.Y, ref tEnter, ref tExit, 1, ref enterAxis)) return false;
-            if (!Slab(r.Origin.Z, r.Dir.Z, bmin.Z, bmax.Z, ref tEnter, ref tExit, 2, ref enterAxis)) return false;
+            if (!Slab((float)r.Origin.X, (float)r.Dir.X, (float)bmin.X, (float)bmax.X, ref tEnter, ref tExit, 0, ref enterAxis)) return false;
+            if (!Slab((float)r.Origin.Y, (float)r.Dir.Y, (float)bmin.Y, (float)bmax.Y, ref tEnter, ref tExit, 1, ref enterAxis)) return false;
+            if (!Slab((float)r.Origin.Z, (float)r.Dir.Z, (float)bmin.Z, (float)bmax.Z, ref tEnter, ref tExit, 2, ref enterAxis)) return false;
 
             return tExit >= Math.Max(0.0, tEnter);
         }
 
         private static bool Slab(float ro, float rd, float min, float max, ref float tEnter, ref float tExit, int axis, ref int enterAxis)
         {
-            if (Math.Abs(rd) < 1e-12)
+            const float eps = 1e-12f;
+            if (Math.Abs(rd) < eps)
             {
                 if (ro < min || ro > max) return false;
                 return true;
@@ -157,6 +185,35 @@ namespace ConsoleGame.RayTracing.Objects
             }
             if (t1 < tExit) tExit = t1;
             return tExit >= tEnter;
+        }
+
+        private static bool NearlyEqual(float a, float b, float eps)
+        {
+            float diff = Math.Abs(a - b);
+            float scale = Math.Max(1.0f, Math.Max(Math.Abs(a), Math.Abs(b)));
+            return diff <= eps * scale;
+        }
+
+        private static int AxisOfNextCrossing(float tCurrent, float tMaxX, float tMaxY, float tMaxZ)
+        {
+            float tNext = Math.Min(tMaxX, Math.Min(tMaxY, tMaxZ));
+            if (float.IsInfinity(tNext)) return -1;
+            if (NearlyEqual(tMaxX, tNext, 1e-6f)) return 0;
+            if (NearlyEqual(tMaxY, tNext, 1e-6f)) return 1;
+            return 2;
+        }
+
+        private static int SelectNormalAxis(bool stepX, bool stepY, bool stepZ, Vec3 dir)
+        {
+            if (stepX && !stepY && !stepZ) return 0;
+            if (!stepX && stepY && !stepZ) return 1;
+            if (!stepX && !stepY && stepZ) return 2;
+            double ax = stepX ? Math.Abs(dir.X) : -1.0;
+            double ay = stepY ? Math.Abs(dir.Y) : -1.0;
+            double az = stepZ ? Math.Abs(dir.Z) : -1.0;
+            if (ax >= ay && ax >= az) return 0;
+            if (ay >= ax && ay >= az) return 1;
+            return 2;
         }
     }
 }
