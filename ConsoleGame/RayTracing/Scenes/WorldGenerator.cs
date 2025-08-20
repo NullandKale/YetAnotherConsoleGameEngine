@@ -403,24 +403,26 @@ namespace ConsoleGame.RayTracing.Scenes
             double wx = x;
             double wz = z;
 
-            double warpFreq = 0.0012;
-            double warpAmp = 18.0;
+            double warpFreq = 0.0016;
+            double warpAmp = 24.0;
             double wx1 = wx + warpAmp * GradientNoise2D(wx * warpFreq, wz * warpFreq, cfg.WorldSeed + 101);
             double wz1 = wz + warpAmp * GradientNoise2D(wx * warpFreq * 1.07, wz * warpFreq * 0.93, cfg.WorldSeed - 77);
 
-            double cont = 0.5 * GradientNoise2D(wx1 * 0.0007, wz1 * 0.0007, cfg.WorldSeed + 1) + 0.5;
-            cont = Math.Pow(Saturate(cont), 1.2);
+            double cont = 0.5 * GradientNoise2D(wx1 * 0.0010, wz1 * 0.0010, cfg.WorldSeed + 1) + 0.5;
+            cont = Math.Pow(Saturate(cont), 0.95);
 
-            double ridged = RidgedFBM2D(wx1, wz1, 5, 2.0, 0.5, 0.0018, cfg.WorldSeed + 200);
+            double ridged = RidgedFBM2D(wx1, wz1, 5, 2.0, 0.5, 0.0022, cfg.WorldSeed + 200);
             ridged = Saturate(ridged);
 
-            double detail = FBM2D(wx1, wz1, 4, 2.0, 0.5, 0.006, cfg.WorldSeed + 300) * 0.5 + 0.5;
+            double detail = FBM2D(wx1, wz1, 4, 2.0, 0.5, 0.009, cfg.WorldSeed + 300) * 0.5 + 0.5;
 
             double riverMask = RiverMask01(x, z, cfg.WorldSeed);
             double carve = riverMask;
-            double h01 = 0.55 * cont + 0.40 * (ridged * cont) + 0.15 * detail;
-            h01 = Math.Max(0.0, h01 - 0.08 * carve);
-            h01 = Math.Pow(Saturate(h01), 1.05);
+            double h01 = 0.42 * cont + 0.40 * ridged + 0.18 * detail;
+            h01 = Math.Max(0.0, h01 - 0.05 * carve);
+            h01 += 0.06 * (FBM2D(wx1, wz1, 2, 2.0, 0.5, 0.012, cfg.WorldSeed + 444) - 0.5);
+            h01 = Saturate(h01);
+            h01 = SmoothStep(0.0, 1.0, h01);
 
             int baseOffset = cfg.WorldHeight / 5;
             int maxRelief = (int)(cfg.WorldHeight * 0.70);
@@ -442,7 +444,7 @@ namespace ConsoleGame.RayTracing.Scenes
             int riverSurface = groundHeight - riverBedDepth + 1;
             if (riverSurface < 1)
                 riverSurface = 1;
-            if (r > 0.60)
+            if (r < 0.60)
                 riverSurface = 0;
             int water = sea;
             if (groundHeight < table)
@@ -458,7 +460,7 @@ namespace ConsoleGame.RayTracing.Scenes
             double wx = x + 23.0 * GradientNoise2D(x * 0.0011, z * 0.0011, seed + 777);
             double wz = z + 19.0 * GradientNoise2D(x * 0.0009, z * 0.0013, seed - 333);
             double v = Math.Abs(GradientNoise2D(wx * freq, wz * freq, seed + 555));
-            double m = 1.0 - SmoothStep(0.02, 0.10, v);
+            double m = 1.0 - SmoothStep(0.03, 0.08, v);
             return m;
         }
 

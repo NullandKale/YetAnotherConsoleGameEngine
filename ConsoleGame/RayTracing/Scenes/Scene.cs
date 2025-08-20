@@ -49,6 +49,10 @@ namespace ConsoleGame.RayTracing.Scenes
             Pitch = DefaultPitch;
         }
 
+        public virtual void Update(float deltaTimeMS)
+        {
+        }
+
         public virtual void HandleInput(ConsoleKeyInfo keyInfo, float dt)
         {
             float moveSpeed = 3.0f;

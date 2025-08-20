@@ -2,6 +2,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using ConsoleGame.RayTracing;  // for Ray, HitRecord
 
 namespace ConsoleGame.RayTracing.Scenes
 {
@@ -10,10 +11,93 @@ namespace ConsoleGame.RayTracing.Scenes
         private WorldManager worldManager;
         private WorldConfig worldConfig;
 
+        // --- Camera physics state ---
+        private bool autoPlaced = false;
+        private double verticalVelocity = 0.0;
+        private const double EyeHeight = 1.7;
+        private const double GravityAccel = 30.0;
+        private const double MaxProbeHeight = 4096.0;
+        private const double GroundClearance = 0.10;
+
         public void InitializeWorld(WorldManager manager, WorldConfig config)
         {
             this.worldManager = manager ?? throw new ArgumentNullException(nameof(manager));
             this.worldConfig = config ?? throw new ArgumentNullException(nameof(config));
+        }
+
+        public override void Update(float deltaTimeMS)
+        {
+            if (worldManager == null)
+            {
+                return;
+            }
+
+            double dt = deltaTimeMS;
+            if (dt < 0.0)
+            {
+                dt = 0.0;
+            }
+            dt *= 0.001;
+
+            // Stream chunks around the player.
+            worldManager.LoadChunksAround(CameraPos);
+
+            // One-time auto placement: drop a ray from above to find the ground and park the camera just above it.
+            if (!autoPlaced)
+            {
+                double probeY = Math.Min(worldConfig.WorldHeight + 16.0, MaxProbeHeight);
+                double groundY;
+                if (TrySampleGroundY(CameraPos.X, CameraPos.Z, probeY, probeY + 8.0, out groundY))
+                {
+                    CameraPos = new Vec3(CameraPos.X, groundY + EyeHeight + GroundClearance, CameraPos.Z);
+                    verticalVelocity = 0.0;
+                    autoPlaced = true;
+                }
+                else
+                {
+                    CameraPos = new Vec3(CameraPos.X, worldConfig.WaterLevel + EyeHeight + 4.0, CameraPos.Z);
+                    verticalVelocity = 0.0;
+                    autoPlaced = true;
+                }
+                return;
+            }
+
+            // Gravity integration (simple Euler).
+            verticalVelocity -= GravityAccel * dt;
+            double newY = CameraPos.Y + verticalVelocity * dt;
+
+            // Query ground directly under current XZ by casting from high above each frame (robust in caves/overhangs).
+            double probeTop = Math.Min(worldConfig.WorldHeight + 16.0, MaxProbeHeight);
+            double ground;
+            bool hasGround = TrySampleGroundY(CameraPos.X, CameraPos.Z, probeTop, probeTop + 8.0, out ground);
+
+            // If we have a ground, prevent tunneling and stick to surface when descending.
+            if (hasGround)
+            {
+                double targetFloorY = ground + EyeHeight + GroundClearance;
+                if (newY <= targetFloorY)
+                {
+                    newY = targetFloorY;
+                    verticalVelocity = 0.0;
+                }
+            }
+
+            CameraPos = new Vec3(CameraPos.X, newY, CameraPos.Z);
+        }
+
+        private bool TrySampleGroundY(double x, double z, double startY, double maxDistance, out double groundY)
+        {
+            groundY = 0.0;
+            Ray r = new Ray(new Vec3(x, startY, z), new Vec3(0.0, -1.0, 0.0));
+            HitRecord rec = default;
+            bool hit = Hit(r, 0.001f, (float)maxDistance, ref rec);
+            if (!hit)
+            {
+                return false;
+            }
+            Vec3 p = r.At(rec.T);
+            groundY = p.Y;
+            return true;
         }
 
         public void ClearLoadedVolumes()

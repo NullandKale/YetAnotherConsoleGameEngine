@@ -38,12 +38,18 @@ namespace ConsoleRayTracing
             public void TryFlipAndBlit(Framebuffer fb) { inner.TryFlipAndBlit(fb); }
         }
 
+        private enum RenderMode { Raytrace, Video }
         private readonly Framebuffer fb;
-        private readonly IConsoleRenderer renderer;
-        private readonly Scene activeScene;
+        private IConsoleRenderer renderer;
+        private RenderMode mode;
         private readonly Dictionary<int, Scene> sceneCache = new Dictionary<int, Scene>();
         private readonly Func<Scene>[] sceneBuilders;
         private int sceneIndex;
+
+        private Scene activeScene;
+        private int rtWidth;
+        private int rtHeight;
+        private int rtSuperSample;
 
         private float lastDeltaTime = 1.0f / 60.0f;
         private float sceneSwitchCooldown = 0.0f;
@@ -51,57 +57,48 @@ namespace ConsoleRayTracing
         public RaytraceEntity(BaseEntity entity, Framebuffer framebuffer, int pxW, int pxH, int superSample)
         {
             this.fb = framebuffer;
-
             this.sceneBuilders = BuildSceneTable();
             this.sceneIndex = DefaultSceneIndex();
-
-            Scene initial = GetOrBuildScene(this.sceneIndex);
-            this.activeScene = new Scene();
-            this.renderer = new RaytraceWrapper(new RaytraceRenderer(framebuffer, this.activeScene, initial.DefaultFovDeg, pxW, pxH, superSample));
-
-            this.activeScene.CameraPos = initial.DefaultCameraPos;
-            this.activeScene.Yaw = initial.DefaultYaw;
-            this.activeScene.Pitch = initial.DefaultPitch;
+            this.activeScene = GetOrBuildScene(this.sceneIndex);
+            this.mode = RenderMode.Raytrace;
+            this.rtWidth = pxW;
+            this.rtHeight = pxH;
+            this.rtSuperSample = superSample;
+            this.renderer = new RaytraceWrapper(new RaytraceRenderer(framebuffer, this.activeScene, activeScene.DefaultFovDeg, pxW, pxH, superSample));
+            this.activeScene.CameraPos = activeScene.DefaultCameraPos;
+            this.activeScene.Yaw = activeScene.DefaultYaw;
+            this.activeScene.Pitch = activeScene.DefaultPitch;
             this.renderer.SetCamera(this.activeScene.CameraPos, this.activeScene.Yaw, this.activeScene.Pitch);
-
             SwitchToScene(this.sceneIndex);
         }
 
         public RaytraceEntity(BaseEntity entity, Framebuffer framebuffer, int cameraIndex, int superSample, bool requestRGBA = false, bool singleFrameAdvance = false, float forcedAspect = 0.0f)
         {
             this.fb = framebuffer;
-
             this.sceneBuilders = BuildSceneTable();
             this.sceneIndex = DefaultSceneIndex();
-
-            Scene initial = GetOrBuildScene(this.sceneIndex);
-            this.activeScene = new Scene();
+            this.activeScene = GetOrBuildScene(this.sceneIndex);
+            this.mode = RenderMode.Video;
             this.renderer = new VideoWrapper(new VideoRenderer(framebuffer, cameraIndex, superSample, requestRGBA, singleFrameAdvance, forcedAspect));
-
-            this.activeScene.CameraPos = initial.DefaultCameraPos;
-            this.activeScene.Yaw = initial.DefaultYaw;
-            this.activeScene.Pitch = initial.DefaultPitch;
+            this.activeScene.CameraPos = activeScene.DefaultCameraPos;
+            this.activeScene.Yaw = activeScene.DefaultYaw;
+            this.activeScene.Pitch = activeScene.DefaultPitch;
             this.renderer.SetCamera(this.activeScene.CameraPos, this.activeScene.Yaw, this.activeScene.Pitch);
-
             SwitchToScene(this.sceneIndex);
         }
 
         public RaytraceEntity(BaseEntity entity, Framebuffer framebuffer, string videoFile, int superSample, bool requestRGBA = false, bool singleFrameAdvance = false, bool playAudio = true)
         {
             this.fb = framebuffer;
-
             this.sceneBuilders = BuildSceneTable();
             this.sceneIndex = DefaultSceneIndex();
-
-            Scene initial = GetOrBuildScene(this.sceneIndex);
-            this.activeScene = new Scene();
+            this.activeScene = GetOrBuildScene(this.sceneIndex);
+            this.mode = RenderMode.Video;
             this.renderer = new VideoWrapper(new VideoRenderer(framebuffer, videoFile, superSample, requestRGBA, singleFrameAdvance, playAudio));
-
-            this.activeScene.CameraPos = initial.DefaultCameraPos;
-            this.activeScene.Yaw = initial.DefaultYaw;
-            this.activeScene.Pitch = initial.DefaultPitch;
+            this.activeScene.CameraPos = activeScene.DefaultCameraPos;
+            this.activeScene.Yaw = activeScene.DefaultYaw;
+            this.activeScene.Pitch = activeScene.DefaultPitch;
             this.renderer.SetCamera(this.activeScene.CameraPos, this.activeScene.Yaw, this.activeScene.Pitch);
-
             SwitchToScene(this.sceneIndex);
         }
 
@@ -153,6 +150,8 @@ namespace ConsoleRayTracing
 
         public override void Update(double deltaTime)
         {
+            float dtMS = (float)(deltaTime * 1000.0);
+            activeScene.Update(dtMS);
             lastDeltaTime = (float)deltaTime;
             sceneSwitchCooldown -= (float)deltaTime;
             if (sceneSwitchCooldown < 0.0f)
@@ -167,7 +166,11 @@ namespace ConsoleRayTracing
         private void SwitchToScene(int index)
         {
             Scene src = GetOrBuildScene(index);
-            activeScene.CopyFrom(src);
+            this.activeScene = src;
+            if (mode == RenderMode.Raytrace)
+            {
+                this.renderer = new RaytraceWrapper(new RaytraceRenderer(fb, this.activeScene, src.DefaultFovDeg, rtWidth, rtHeight, rtSuperSample));
+            }
             renderer.SetFov(src.DefaultFovDeg);
             renderer.SetCamera(activeScene.CameraPos, activeScene.Yaw, activeScene.Pitch);
             activeScene.RebuildBVH();
@@ -193,7 +196,7 @@ namespace ConsoleRayTracing
 
         private static int DefaultSceneIndex()
         {
-            return 0;
+            return 12;
         }
 
         private static Func<Scene>[] BuildSceneTable()
