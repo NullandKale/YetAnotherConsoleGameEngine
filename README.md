@@ -14,7 +14,9 @@ Higher Quality version here: [Assets/RTConsole.mp4](Assets/RTConsole.mp4)
 
 https://github.com/user-attachments/assets/d6c066e6-49c5-428d-923f-66186bd413fd
 
+You need to change a line in Program.cs to activate it but there is a video reader mode which allows reading cameras and arbitrary video files
 
+https://github.com/user-attachments/assets/71801318-bc0e-4d4c-9efb-66c455577134
 
 ---
 
