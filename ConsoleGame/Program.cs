@@ -15,13 +15,13 @@ namespace ConsoleRayTracing
         private static void Main(string[] args)
         {
             Console.CursorVisible = false;
-
+            
             terminal = new Terminal();
 
             int cellsW = Console.WindowWidth - 1;
             int cellsH = Console.WindowHeight - 1;
 
-            int superSample = 1;
+            int superSample = 2;
             if (args != null && args.Length > 0)
             {
                 int parsed;
@@ -39,6 +39,8 @@ namespace ConsoleRayTracing
 
             BaseEntity rt = new BaseEntity(0, 0, new Chexel());
             rt.AddComponent(new RaytraceEntity(rt, rayFb, pxW, pxH, superSample));
+            //rt.AddComponent(new RaytraceEntity(rt, rayFb, 1, superSample, false, false, 1.77f));
+            //rt.AddComponent(new RaytraceEntity(rt, rayFb, pxW, pxH, superSample));
             terminal.AddEntity(rt);
 
             terminal.Start();

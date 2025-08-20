@@ -1,5 +1,4 @@
-﻿// File: RaytraceRenderer.cs
-using ConsoleGame.Components;
+﻿using ConsoleGame.Components;
 using ConsoleGame.Entities;
 using ConsoleGame.RayTracing;
 using ConsoleGame.RayTracing.Objects;
@@ -14,119 +13,107 @@ namespace ConsoleRayTracing
 {
     public partial class RaytraceEntity : BaseComponent
     {
+        private interface IConsoleRenderer
+        {
+            void SetCamera(Vec3 pos, float yaw, float pitch);
+            void SetFov(float fovDeg);
+            void TryFlipAndBlit(Framebuffer fb);
+        }
+
+        private sealed class RaytraceWrapper : IConsoleRenderer
+        {
+            private readonly RaytraceRenderer inner;
+            public RaytraceWrapper(RaytraceRenderer inner) { this.inner = inner; }
+            public void SetCamera(Vec3 pos, float yaw, float pitch) { inner.SetCamera(pos, yaw, pitch); }
+            public void SetFov(float fovDeg) { inner.SetFov(fovDeg); }
+            public void TryFlipAndBlit(Framebuffer fb) { inner.TryFlipAndBlit(fb); }
+        }
+
+        private sealed class VideoWrapper : IConsoleRenderer
+        {
+            private readonly VideoRenderer inner;
+            public VideoWrapper(VideoRenderer inner) { this.inner = inner; }
+            public void SetCamera(Vec3 pos, float yaw, float pitch) { /* no-op for video */ }
+            public void SetFov(float fovDeg) { /* no-op for video */ }
+            public void TryFlipAndBlit(Framebuffer fb) { inner.TryFlipAndBlit(fb); }
+        }
+
         private readonly Framebuffer fb;
-        private readonly RaytraceRenderer renderer;
+        private readonly IConsoleRenderer renderer;
         private readonly Scene activeScene;
         private readonly Dictionary<int, Scene> sceneCache = new Dictionary<int, Scene>();
         private readonly Func<Scene>[] sceneBuilders;
         private int sceneIndex;
 
-        private Vec3 camPos;
-        private float yaw;
-        private float pitch;
         private float lastDeltaTime = 1.0f / 60.0f;
         private float sceneSwitchCooldown = 0.0f;
 
         public RaytraceEntity(BaseEntity entity, Framebuffer framebuffer, int pxW, int pxH, int superSample)
         {
             this.fb = framebuffer;
-            this.camPos = new Vec3(0.0, 10.0, 0.0);
-            this.yaw = 0.0f;
-            this.pitch = 0.0f;
 
             this.sceneBuilders = BuildSceneTable();
             this.sceneIndex = DefaultSceneIndex();
 
             Scene initial = GetOrBuildScene(this.sceneIndex);
             this.activeScene = new Scene();
-            this.renderer = new RaytraceRenderer(framebuffer, this.activeScene, initial.DefaultFovDeg, pxW, pxH, superSample);
-            this.camPos = initial.DefaultCameraPos;
-            this.yaw = initial.DefaultYaw;
-            this.pitch = initial.DefaultPitch;
-            this.renderer.SetCamera(camPos, yaw, pitch);
+            this.renderer = new RaytraceWrapper(new RaytraceRenderer(framebuffer, this.activeScene, initial.DefaultFovDeg, pxW, pxH, superSample));
+
+            this.activeScene.CameraPos = initial.DefaultCameraPos;
+            this.activeScene.Yaw = initial.DefaultYaw;
+            this.activeScene.Pitch = initial.DefaultPitch;
+            this.renderer.SetCamera(this.activeScene.CameraPos, this.activeScene.Yaw, this.activeScene.Pitch);
+
+            SwitchToScene(this.sceneIndex);
+        }
+
+        public RaytraceEntity(BaseEntity entity, Framebuffer framebuffer, int cameraIndex, int superSample, bool requestRGBA = false, bool singleFrameAdvance = false, float forcedAspect = 0.0f)
+        {
+            this.fb = framebuffer;
+
+            this.sceneBuilders = BuildSceneTable();
+            this.sceneIndex = DefaultSceneIndex();
+
+            Scene initial = GetOrBuildScene(this.sceneIndex);
+            this.activeScene = new Scene();
+            this.renderer = new VideoWrapper(new VideoRenderer(framebuffer, cameraIndex, superSample, requestRGBA, singleFrameAdvance, forcedAspect));
+
+            this.activeScene.CameraPos = initial.DefaultCameraPos;
+            this.activeScene.Yaw = initial.DefaultYaw;
+            this.activeScene.Pitch = initial.DefaultPitch;
+            this.renderer.SetCamera(this.activeScene.CameraPos, this.activeScene.Yaw, this.activeScene.Pitch);
+
+            SwitchToScene(this.sceneIndex);
+        }
+
+        public RaytraceEntity(BaseEntity entity, Framebuffer framebuffer, string videoFile, int superSample, bool requestRGBA = false, bool singleFrameAdvance = false, bool playAudio = true)
+        {
+            this.fb = framebuffer;
+
+            this.sceneBuilders = BuildSceneTable();
+            this.sceneIndex = DefaultSceneIndex();
+
+            Scene initial = GetOrBuildScene(this.sceneIndex);
+            this.activeScene = new Scene();
+            this.renderer = new VideoWrapper(new VideoRenderer(framebuffer, videoFile, superSample, requestRGBA, singleFrameAdvance, playAudio));
+
+            this.activeScene.CameraPos = initial.DefaultCameraPos;
+            this.activeScene.Yaw = initial.DefaultYaw;
+            this.activeScene.Pitch = initial.DefaultPitch;
+            this.renderer.SetCamera(this.activeScene.CameraPos, this.activeScene.Yaw, this.activeScene.Pitch);
 
             SwitchToScene(this.sceneIndex);
         }
 
         public override void HandleInput(ConsoleKeyInfo keyInfo)
         {
-            float moveSpeed = 3.0f;
-            float rotSpeed = 1.8f;
-
-            if (keyInfo.Modifiers == ConsoleModifiers.Shift)
-            {
-                moveSpeed *= 2;
-                rotSpeed *= 2;
-            }
-
             float dt = lastDeltaTime;
-            if (dt < 0.0) dt = 0.0f;
-
-            if (keyInfo.Key == ConsoleKey.LeftArrow)
+            if (dt < 0.0f)
             {
-                yaw -= rotSpeed * dt;
+                dt = 0.0f;
             }
 
-            if (keyInfo.Key == ConsoleKey.RightArrow)
-            {
-                yaw += rotSpeed * dt;
-            }
-
-            if (keyInfo.Key == ConsoleKey.UpArrow)
-            {
-                pitch += rotSpeed * dt;
-            }
-
-            if (keyInfo.Key == ConsoleKey.DownArrow)
-            {
-                pitch -= rotSpeed * dt;
-            }
-
-            float limit = (MathF.PI * 0.5f) - 0.01f;
-            if (pitch > limit)
-            {
-                pitch = limit;
-            }
-            if (pitch < -limit)
-            {
-                pitch = -limit;
-            }
-
-            float cy = MathF.Cos(yaw);
-            float sy = MathF.Sin(yaw);
-            Vec3 forwardXZ = new Vec3(sy, 0.0, -cy);
-            Vec3 rightXZ = new Vec3(cy, 0.0, sy);
-            Vec3 up = new Vec3(0.0, 1.0, 0.0);
-
-            if (keyInfo.Key == ConsoleKey.W)
-            {
-                camPos = camPos + forwardXZ * (moveSpeed * dt);
-            }
-
-            if (keyInfo.Key == ConsoleKey.S)
-            {
-                camPos = camPos - forwardXZ * (moveSpeed * dt);
-            }
-
-            if (keyInfo.Key == ConsoleKey.A)
-            {
-                camPos = camPos - rightXZ * (moveSpeed * dt);
-            }
-
-            if (keyInfo.Key == ConsoleKey.D)
-            {
-                camPos = camPos + rightXZ * (moveSpeed * dt);
-            }
-
-            if (keyInfo.Key == ConsoleKey.E)
-            {
-                camPos = camPos + up * (moveSpeed * dt);
-            }
-
-            if (keyInfo.Key == ConsoleKey.Q)
-            {
-                camPos = camPos - up * (moveSpeed * dt);
-            }
+            this.activeScene.HandleInput(keyInfo, dt);
 
             if (keyInfo.Key == ConsoleKey.I)
             {
@@ -156,12 +143,12 @@ namespace ConsoleRayTracing
                 }
             }
 
-            renderer.SetCamera(camPos, yaw, pitch);
+            renderer.SetCamera(this.activeScene.CameraPos, this.activeScene.Yaw, this.activeScene.Pitch);
         }
 
         public string GetInfoString()
         {
-            return $"pos=({camPos.X:0.###},{camPos.Y:0.###},{camPos.Z:0.###}) yaw={yaw:0.###} pitch={pitch:0.###} scene={sceneIndex} objs={activeScene.Objects.Count} tris={MeshBVH.counter}   ";
+            return $"pos=({activeScene.CameraPos.X:0.###},{activeScene.CameraPos.Y:0.###},{activeScene.CameraPos.Z:0.###}) yaw={activeScene.Yaw:0.###} pitch={activeScene.Pitch:0.###} scene={sceneIndex} objs={activeScene.Objects.Count} tris={MeshBVH.counter}   ";
         }
 
         public override void Update(double deltaTime)
@@ -172,7 +159,7 @@ namespace ConsoleRayTracing
             {
                 sceneSwitchCooldown = 0.0f;
             }
-            renderer.SetCamera(camPos, yaw, pitch);
+            renderer.SetCamera(this.activeScene.CameraPos, this.activeScene.Yaw, this.activeScene.Pitch);
             renderer.TryFlipAndBlit(fb);
             Program.terminal.SetDebugString(GetInfoString());
         }
@@ -180,19 +167,9 @@ namespace ConsoleRayTracing
         private void SwitchToScene(int index)
         {
             Scene src = GetOrBuildScene(index);
-            activeScene.Objects.Clear();
-            activeScene.Objects.AddRange(src.Objects);
-            activeScene.Lights.Clear();
-            activeScene.Lights.AddRange(src.Lights);
-            activeScene.BackgroundTop = src.BackgroundTop;
-            activeScene.BackgroundBottom = src.BackgroundBottom;
-            activeScene.Ambient = src.Ambient;
-            camPos = src.DefaultCameraPos;
-            yaw = src.DefaultYaw;
-            pitch = src.DefaultPitch;
+            activeScene.CopyFrom(src);
             renderer.SetFov(src.DefaultFovDeg);
-            renderer.SetCamera(camPos, yaw, pitch);
-            renderer.ResetTaaHistory();
+            renderer.SetCamera(activeScene.CameraPos, activeScene.Yaw, activeScene.Pitch);
             activeScene.RebuildBVH();
         }
 
