@@ -10,13 +10,23 @@ On Behest of the reddit comments I implemented a renderer that uses PInvoke to d
 
 Example video of the ANSITerminalRenderer providing a MASSIVE speedup, the PInvoke is about the same speed but plays less nicely with the debug text printing.
 
-Higher Quality version here: [Assets/RTConsole.mp4](Assets/RTConsole.mp4)
+Higher Quality version here: [Assets/RTConsole.mp4]
+
 
 https://github.com/user-attachments/assets/d6c066e6-49c5-428d-923f-66186bd413fd
 
 You need to change a line in Program.cs to activate it but there is a video reader mode which allows reading cameras and arbitrary video files
 
 https://github.com/user-attachments/assets/71801318-bc0e-4d4c-9efb-66c455577134
+
+---
+High Res
+
+<img width="2560" height="1393" alt="Screenshot 2025-08-22 024508" src="https://github.com/user-attachments/assets/3e7a0746-0a45-497f-98af-f3e620bd74c1" />
+
+Low Res
+
+<img width="2560" height="1393" alt="Screenshot 2025-08-22 024524" src="https://github.com/user-attachments/assets/cf4caf98-ffc1-4ceb-8118-faeaddb3f5bf" />
 
 ---
 
