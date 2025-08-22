@@ -10,7 +10,7 @@ On Behest of the reddit comments I implemented a renderer that uses PInvoke to d
 
 Example video of the ANSITerminalRenderer providing a MASSIVE speedup, the PInvoke is about the same speed but plays less nicely with the debug text printing.
 
-Higher Quality version here: [Assets/RTConsole.mp4](Assets/RTConsole.mp4)<img width="2560" height="1393" alt="Screenshot 2025-08-22 024524" src="https://github.com/user-attachments/assets/61b6a17f-e387-4049-8b58-734e037a645e" />
+Higher Quality version here: [Assets/RTConsole.mp4]
 
 
 https://github.com/user-attachments/assets/d6c066e6-49c5-428d-923f-66186bd413fd
