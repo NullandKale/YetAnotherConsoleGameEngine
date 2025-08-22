@@ -29,8 +29,8 @@ namespace ConsoleGame.RayTracing
         private float yaw = 0.0f;
         private float pitch = 0.0f;
 
-        private const int DiffuseBounces = 2;
-        private const int IndirectSamples = 2;
+        private const int DiffuseBounces = 1;
+        private const int IndirectSamples = 1;
         private const int MaxMirrorBounces = 2;
         private const float MirrorThreshold = 0.9f;
         private const float Eps = 1e-4f;
@@ -294,6 +294,54 @@ namespace ConsoleGame.RayTracing
                 return Lerp(scene.BackgroundBottom, scene.BackgroundTop, tbg);
             }
             Vec3 color = rec.Mat.Emission;
+
+            // Transparent / refractive materials (glass etc.): use refraction + Fresnel reflection and return early (no diffuse).
+            if (rec.Mat.Transparency > 0.0)
+            {
+                if (mirrorDepth >= MaxMirrorBounces) return color;
+                Vec3 n = rec.N;
+                Vec3 wo = r.Dir;
+                bool frontFace = n.Dot(wo) < 0.0;
+                Vec3 nl = frontFace ? n : n * -1.0f;
+                float etaI = frontFace ? 1.0f : (float)rec.Mat.IndexOfRefraction;
+                float etaT = frontFace ? (float)rec.Mat.IndexOfRefraction : 1.0f;
+                float eta = etaI / etaT;
+
+                Vec3 reflDir = Reflect(wo, nl).Normalized();
+                bool hasRefract = Refract(wo, nl, eta, out Vec3 refrDir);
+
+                float cosTheta = MathF.Abs(nl.Dot(wo * -1.0f));
+                float fresnel = FresnelSchlick(cosTheta, etaI, etaT);
+                float R = fresnel;
+                float Tr = (float)Math.Clamp(rec.Mat.Transparency, 0.0, 1.0);
+                float T = hasRefract ? (1.0f - R) * Tr : 0.0f;
+
+                // Optional artist control: allow extra reflectivity to bias reflection beyond Fresnel.
+                R = Math.Clamp(R + (float)rec.Mat.Reflectivity * (1.0f - R), 0.0f, 1.0f);
+
+                Vec3 accum = Vec3.Zero;
+
+                if (R > 0.0f)
+                {
+                    Ray reflRay = new Ray(rec.P + nl * Eps, reflDir);
+                    Vec3 rc = TraceFull(scene, reflRay, mirrorDepth + 1, diffuseDepth, ref rng, screenU, screenV);
+                    // Mirror tint by Albedo for colored mirrors.
+                    accum += rc * rec.Mat.Albedo * R;
+                }
+
+                if (T > 0.0f)
+                {
+                    Ray refrRay = new Ray(rec.P - nl * Eps, refrDir.Normalized());
+                    Vec3 tc = TraceFull(scene, refrRay, mirrorDepth + 1, diffuseDepth, ref rng, screenU, screenV);
+                    // Simple colored transmission; for Beer-Lambert you'd need path length inside medium.
+                    Vec3 transTint = rec.Mat.TransmissionColor;
+                    accum += tc * transTint * T;
+                }
+
+                color += accum;
+                return color;
+            }
+
             if ((float)rec.Mat.Reflectivity >= MirrorThreshold)
             {
                 if (mirrorDepth >= MaxMirrorBounces) return color;
@@ -303,11 +351,13 @@ namespace ConsoleGame.RayTracing
                 color += new Vec3(reflCol.X * rec.Mat.Albedo.X, reflCol.Y * rec.Mat.Albedo.Y, reflCol.Z * rec.Mat.Albedo.Z);
                 return color;
             }
+
             if (scene.Ambient.Intensity > 0.0f)
             {
                 Vec3 a = new Vec3(scene.Ambient.Color.X * scene.Ambient.Intensity, scene.Ambient.Color.Y * scene.Ambient.Intensity, scene.Ambient.Color.Z * scene.Ambient.Intensity);
                 color += new Vec3(a.X * rec.Mat.Albedo.X, a.Y * rec.Mat.Albedo.Y, a.Z * rec.Mat.Albedo.Z);
             }
+
             for (int i = 0; i < scene.Lights.Count; i++)
             {
                 PointLight light = scene.Lights[i];
@@ -317,12 +367,18 @@ namespace ConsoleGame.RayTracing
                 Vec3 ldir = toL / dist;
                 float nDotL = MathF.Max(0.0f, rec.N.Dot(ldir));
                 if (nDotL <= 0.0) continue;
+
                 Ray shadow = new Ray(rec.P + rec.N * Eps, ldir);
-                if (scene.Occluded(shadow, dist - Eps, screenU, screenV)) continue;
+
+                // Accumulate colored transmittance to the light through transparent occluders.
+                Vec3 transToLight = ComputeTransmittanceToLight(scene, shadow, dist - Eps, screenU, screenV);
+                if (transToLight.X <= 1e-6 && transToLight.Y <= 1e-6 && transToLight.Z <= 1e-6) continue;
+
                 float atten = light.Intensity / dist2;
                 Vec3 lambert = rec.Mat.Albedo * (nDotL * atten) * light.Color;
-                color += lambert;
+                color += lambert * transToLight;
             }
+
             if (diffuseDepth < DiffuseBounces)
             {
                 Vec3 indirect = Vec3.Zero;
@@ -336,7 +392,60 @@ namespace ConsoleGame.RayTracing
                 float invSpp = 1.0f / IndirectSamples;
                 color += new Vec3(indirect.X * invSpp, indirect.Y * invSpp, indirect.Z * invSpp);
             }
+
             return color;
+        }
+
+        private static bool Refract(Vec3 v, Vec3 n, float eta, out Vec3 refrDir)
+        {
+            // v: incident (unit), n: outward normal (unit), eta = eta_i / eta_t
+            float cosi = -MathF.Max(-1.0f, MathF.Min(1.0f, (float)v.Dot(n)));
+            float k = 1.0f - eta * eta * (1.0f - cosi * cosi);
+            if (k < 0.0f)
+            {
+                refrDir = default;
+                return false;
+            }
+            refrDir = (v * eta) + (n * (eta * cosi - MathF.Sqrt(k)));
+            return true;
+        }
+
+        private static float FresnelSchlick(float cosTheta, float etaI, float etaT)
+        {
+            float r0 = (etaI - etaT) / (etaI + etaT);
+            r0 = r0 * r0;
+            return r0 + (1.0f - r0) * MathF.Pow(1.0f - cosTheta, 5.0f);
+        }
+
+        private static Vec3 ComputeTransmittanceToLight(Scene scene, Ray shadow, float maxDist, float screenU, float screenV)
+        {
+            Vec3 trans = new Vec3(1.0, 1.0, 1.0);
+            float tTraveled = 0.0f;
+            HitRecord block = default;
+            float tmin = 0.0f + Eps;
+            while (scene.Hit(shadow, tmin, maxDist, ref block, screenU, screenV))
+            {
+                Vec3 hitVec = block.P - shadow.Origin;
+                float tHit = MathF.Sqrt((float)hitVec.Dot(hitVec));
+                if (tHit > maxDist) break;
+
+                double tr = block.Mat.Transparency;
+                if (tr <= 0.0)
+                {
+                    return new Vec3(0.0, 0.0, 0.0);
+                }
+
+                Vec3 tint = block.Mat.TransmissionColor;
+                trans = new Vec3(trans.X * tint.X * (float)tr, trans.Y * tint.Y * (float)tr, trans.Z * tint.Z * (float)tr);
+
+                if (trans.X <= 1e-6 && trans.Y <= 1e-6 && trans.Z <= 1e-6) return new Vec3(0.0, 0.0, 0.0);
+
+                tTraveled = tHit + Eps;
+                tmin = tTraveled;
+                shadow = new Ray(shadow.Origin, shadow.Dir);
+                // Continue marching through further transparent occluders.
+            }
+            return trans;
         }
 
         private static Vec3 Reflect(Vec3 v, Vec3 n)

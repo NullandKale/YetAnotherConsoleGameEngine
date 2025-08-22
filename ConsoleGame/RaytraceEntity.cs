@@ -300,7 +300,7 @@ public partial class RaytraceEntity : BaseComponent
         return s;
     }
 
-    private static int DefaultSceneIndex() { return 12; }
+    private static int DefaultSceneIndex() { return 0; }
 
     private Func<Scene>[] BuildSceneTable()
     {
@@ -308,6 +308,7 @@ public partial class RaytraceEntity : BaseComponent
 
         List<Func<Scene>> list =
         [
+            () => TestScenes.BuildTestScene(),
             () => Scenes.BuildTestScene(),
             () => Scenes.BuildDemoScene(),
             () => Scenes.BuildCornellBox(),

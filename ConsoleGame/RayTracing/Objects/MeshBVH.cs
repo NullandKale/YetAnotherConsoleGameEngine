@@ -10,7 +10,7 @@ namespace ConsoleGame.RayTracing.Objects
     public sealed class MeshBVH : Hittable
     {
         public static int counter = 0;
-        private const int TargetLeafSize = 4;
+        private const int TargetLeafSize = 8;
         private const int SAH_Bins = 16;
 
         // Flattened node arrays (SoA)

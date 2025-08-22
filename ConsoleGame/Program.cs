@@ -12,7 +12,7 @@ public static class Program
 
         terminal = new Terminal();
 
-        int superSample = 2;
+        int superSample = 1;
         if (args != null && args.Length > 0)
         {
             int parsed;

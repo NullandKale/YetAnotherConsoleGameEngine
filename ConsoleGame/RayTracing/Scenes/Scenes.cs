@@ -114,6 +114,37 @@ namespace ConsoleGame.RayTracing.Scenes
             // --- Add the volume to the scene ---
             s.Objects.Add(new VolumeGrid(cells, minCorner, voxelSize, materialLookup));
 
+            // --- Pedestals and spheres around the volume + a clear sphere at the exact center on the floor ---
+            Material pedestalMat = new Material(new Vec3(0.85, 0.85, 0.85), 0.0, 0.0, Vec3.Zero);
+            Material red = new Material(new Vec3(0.95, 0.15, 0.15), 0.05, 0.0, Vec3.Zero);
+            Material green = new Material(new Vec3(0.15, 0.95, 0.20), 0.05, 0.0, Vec3.Zero);
+            Material blue = new Material(new Vec3(0.15, 0.25, 0.95), 0.05, 0.0, Vec3.Zero);
+            Material mirror = new Material(new Vec3(0.98, 0.98, 0.98), 0.0, 0.9, Vec3.Zero);
+            Material clear = new Material(new Vec3(1.0, 1.0, 1.0), 0.0, 0.02, Vec3.Zero, 1.0, 1.5, new Vec3(1.0, 1.0, 1.0));
+
+            float pedR = 0.25f;
+            float pedH = 1.2f;
+            float sphR = 0.35f;
+
+            Vec3 centerXZ = new Vec3(0.0, 0.0, -2.0); // geometric center of the grid in XZ
+            Vec3 posL = new Vec3(-1.6, 0.0, -2.0);
+            Vec3 posR = new Vec3(1.6, 0.0, -2.0);
+            Vec3 posF = new Vec3(0.0, 0.0, -0.8);
+            Vec3 posB = new Vec3(0.0, 0.0, -3.2);
+
+            s.Objects.Add(new CylinderY(posL, pedR, 0.0f, pedH, true, pedestalMat));
+            s.Objects.Add(new CylinderY(posR, pedR, 0.0f, pedH, true, pedestalMat));
+            s.Objects.Add(new CylinderY(posF, pedR, 0.0f, pedH, true, pedestalMat));
+            s.Objects.Add(new CylinderY(posB, pedR, 0.0f, pedH, true, pedestalMat));
+
+            s.Objects.Add(new Sphere(posL + new Vec3(0.0, pedH + sphR, 0.0), sphR, mirror));
+            s.Objects.Add(new Sphere(posR + new Vec3(0.0, pedH + sphR, 0.0), sphR, red));
+            s.Objects.Add(new Sphere(posF + new Vec3(0.0, pedH + sphR, 0.0), sphR, blue));
+            s.Objects.Add(new Sphere(posB + new Vec3(0.0, pedH + sphR, 0.0), sphR, green));
+
+            float clearR = 0.5f;
+            s.Objects.Add(new Sphere(new Vec3(centerXZ.X, centerXZ.Y + 2, centerXZ.Z), clearR, clear));
+
             // --- Lighting (two lights to reduce flatness) ---
             s.Lights.Add(new PointLight(new Vec3(0.0, 5.0, -3.0), new Vec3(1.0, 1.0, 1.0), 220.0f));
             s.Lights.Add(new PointLight(new Vec3(-2.5, 3.0, -1.8), new Vec3(1.0, 0.95, 0.9), 90.0f));
