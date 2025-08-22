@@ -7,6 +7,99 @@ using ConsoleGame.RayTracing.Objects;
 
 namespace ConsoleGame.RayTracing.Scenes
 {
+    public static class MeshSwatches
+    {
+        // Exact 16-color console sRGB anchors (match ConsolePalette order):
+        // Black, DarkBlue, DarkGreen, DarkCyan, DarkRed, DarkMagenta, DarkYellow, Gray,
+        // DarkGray, Blue, Green, Cyan, Red, Magenta, Yellow, White
+        // (Kept here locally so scenes can pick deterministic swatches without peeking into ConsolePalette internals.)
+        private static readonly Vec3[] Palette16 = new Vec3[]
+        {
+            new Vec3(0.00f,0.00f,0.00f),  // Black
+            new Vec3(0.00f,0.00f,0.50f),  // DarkBlue
+            new Vec3(0.00f,0.50f,0.00f),  // DarkGreen
+            new Vec3(0.00f,0.50f,0.50f),  // DarkCyan
+            new Vec3(0.50f,0.00f,0.00f),  // DarkRed
+            new Vec3(0.50f,0.00f,0.50f),  // DarkMagenta
+            new Vec3(0.50f,0.50f,0.00f),  // DarkYellow
+            new Vec3(0.75f,0.75f,0.75f),  // Gray
+            new Vec3(0.50f,0.50f,0.50f),  // DarkGray
+            new Vec3(0.00f,0.00f,1.00f),  // Blue
+            new Vec3(0.00f,1.00f,0.00f),  // Green
+            new Vec3(0.00f,1.00f,1.00f),  // Cyan
+            new Vec3(1.00f,0.00f,0.00f),  // Red
+            new Vec3(1.00f,0.00f,1.00f),  // Magenta
+            new Vec3(1.00f,1.00f,0.00f),  // Yellow
+            new Vec3(1.00f,1.00f,1.00f)   // White
+        };
+
+        private static Vec3 FromConsole(ConsoleColor c)
+        {
+            int idx = (int)c;
+            if (idx < 0 || idx >= Palette16.Length) return Palette16[0];
+            return Palette16[idx];
+        }
+
+        private static Vec3 Scale(ConsoleColor c, float k)
+        {
+            if (k < 0.0f) k = 0.0f;
+            if (k > 1.0f) k = 1.0f;
+            Vec3 v = FromConsole(c);
+            return new Vec3(v.X * k, v.Y * k, v.Z * k);
+        }
+
+        // ---------- Neutrals (great for bones, clay, porcelain, etc.) ----------
+        public static readonly Vec3 Black = FromConsole(ConsoleColor.Black);
+        public static readonly Vec3 Charcoal = FromConsole(ConsoleColor.DarkGray);
+        public static readonly Vec3 Stone = FromConsole(ConsoleColor.Gray);
+        public static readonly Vec3 WhiteSoft = Scale(ConsoleColor.White, 0.85f);   // avoids harsh clipping
+        public static readonly Vec3 White = FromConsole(ConsoleColor.White);
+
+        // ---------- Metals / warm materials ----------
+        public static readonly Vec3 Gold = Scale(ConsoleColor.Yellow, 0.90f);
+        public static readonly Vec3 Brass = Scale(ConsoleColor.DarkYellow, 1.00f);
+        public static readonly Vec3 Copper = new Vec3(0.80f, 0.45f, 0.25f);      // will quantize near DarkYellow/Red
+
+        // ---------- Gem-ish primaries (bright but softened a bit) ----------
+        public static readonly Vec3 Ruby = Scale(ConsoleColor.Red, 0.92f);
+        public static readonly Vec3 Emerald = Scale(ConsoleColor.Green, 0.85f);
+        public static readonly Vec3 Sapphire = Scale(ConsoleColor.Blue, 0.85f);
+        public static readonly Vec3 Amethyst = Scale(ConsoleColor.Magenta, 0.88f);
+        public static readonly Vec3 CyanSoft = Scale(ConsoleColor.Cyan, 0.85f);
+        public static readonly Vec3 Jade = Scale(ConsoleColor.DarkCyan, 1.00f);
+
+        // ---------- Helpful dark accents ----------
+        public static readonly Vec3 OxideRed = FromConsole(ConsoleColor.DarkRed);
+        public static readonly Vec3 PineGreen = FromConsole(ConsoleColor.DarkGreen);
+        public static readonly Vec3 Navy = FromConsole(ConsoleColor.DarkBlue);
+        public static readonly Vec3 Plum = FromConsole(ConsoleColor.DarkMagenta);
+
+        // ---------- Console-aligned primaries (exact anchors) ----------
+        public static readonly Vec3 Red = FromConsole(ConsoleColor.Red);
+        public static readonly Vec3 Green = FromConsole(ConsoleColor.Green);
+        public static readonly Vec3 Blue = FromConsole(ConsoleColor.Blue);
+        public static readonly Vec3 Magenta = FromConsole(ConsoleColor.Magenta);
+        public static readonly Vec3 Yellow = FromConsole(ConsoleColor.Yellow);
+        public static readonly Vec3 Cyan = FromConsole(ConsoleColor.Cyan);
+
+        // ---------- Material helpers ----------
+        public static Material Matte(Vec3 albedo, double specular = 0.10, double reflectivity = 0.00)
+        {
+            return new Material(albedo, specular, reflectivity, Vec3.Zero);
+        }
+
+        public static Material Mirror(Vec3 tint, double reflectivity = 0.85)
+        {
+            return new Material(tint, 0.0, reflectivity, Vec3.Zero);
+        }
+
+        public static Material Emissive(Vec3 emission)
+        {
+            return new Material(new Vec3(0.0f, 0.0f, 0.0f), 0.0, 0.0, emission);
+        }
+    }
+
+
     public static class MeshScenes
     {
         public static Scene BuildCowScene()

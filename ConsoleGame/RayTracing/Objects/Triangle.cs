@@ -49,7 +49,7 @@ namespace ConsoleGame.RayTracing.Objects
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec)
+        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec, float screenU, float screenV)
         {
             if (Sse.IsSupported && Sse41.IsSupported)
             {

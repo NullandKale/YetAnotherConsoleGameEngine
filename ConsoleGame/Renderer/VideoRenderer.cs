@@ -23,42 +23,11 @@ namespace ConsoleGame.RayTracing
         private readonly Chexel[,] frameBuffer;
         private readonly FixedThreadFor threadpool;
 
+        // Constructor flags kept for API compatibility; dithering is no longer used.
         private readonly bool useDither;
         private readonly float ditherStrength;
 
-        private static readonly Vec3[] Palette16 = new Vec3[]
-        {
-            new Vec3(0.00f,0.00f,0.00f),
-            new Vec3(0.00f,0.00f,0.50f),
-            new Vec3(0.00f,0.50f,0.00f),
-            new Vec3(0.00f,0.50f,0.50f),
-            new Vec3(0.50f,0.00f,0.00f),
-            new Vec3(0.50f,0.00f,0.50f),
-            new Vec3(0.50f,0.50f,0.00f),
-            new Vec3(0.75f,0.75f,0.75f),
-            new Vec3(0.50f,0.50f,0.50f),
-            new Vec3(0.00f,0.00f,1.00f),
-            new Vec3(0.00f,1.00f,0.00f),
-            new Vec3(0.00f,1.00f,1.00f),
-            new Vec3(1.00f,0.00f,0.00f),
-            new Vec3(1.00f,0.00f,1.00f),
-            new Vec3(1.00f,1.00f,0.00f),
-            new Vec3(1.00f,1.00f,1.00f)
-        };
-
-        private static readonly float[,] Bayer8 =
-        {
-            { 0f/64f, 48f/64f, 12f/64f, 60f/64f, 3f/64f, 51f/64f, 15f/64f, 63f/64f },
-            { 32f/64f, 16f/64f, 44f/64f, 28f/64f, 35f/64f, 19f/64f, 47f/64f, 31f/64f },
-            { 8f/64f, 56f/64f, 4f/64f, 52f/64f, 11f/64f, 59f/64f, 7f/64f, 55f/64f },
-            { 40f/64f, 24f/64f, 36f/64f, 20f/64f, 43f/64f, 27f/64f, 39f/64f, 23f/64f },
-            { 2f/64f, 50f/64f, 14f/64f, 62f/64f, 1f/64f, 49f/64f, 13f/64f, 61f/64f },
-            { 34f/64f, 18f/64f, 46f/64f, 30f/64f, 33f/64f, 17f/64f, 45f/64f, 29f/64f },
-            { 10f/64f, 58f/64f, 6f/64f, 54f/64f, 9f/64f, 57f/64f, 5f/64f, 53f/64f },
-            { 42f/64f, 26f/64f, 38f/64f, 22f/64f, 41f/64f, 25f/64f, 37f/64f, 21f/64f }
-        };
-
-        public VideoRenderer(Framebuffer framebuffer, string videoFile, int superSample = 1, bool requestRGBA = false, bool singleFrameAdvance = false, bool playAudio = true, bool enableDither = true, float ditherStrength = 0.12f)
+        public VideoRenderer(Framebuffer framebuffer, string videoFile, int superSample = 1, bool requestRGBA = false, bool singleFrameAdvance = false, bool playAudio = true, bool enableDither = false, float ditherStrength = 0.0f)
         {
             if (framebuffer == null) throw new ArgumentNullException(nameof(framebuffer));
             fbW = framebuffer.Width;
@@ -68,8 +37,8 @@ namespace ConsoleGame.RayTracing
             hiH = fbH * 2 * ss;
 
             useRGBA = requestRGBA;
-            useDither = enableDither;
-            this.ditherStrength = Clamp01(ditherStrength);
+            useDither = false;
+            this.ditherStrength = 0.0f;
 
             reader = new AsyncFfmpegVideoReader(videoFile, singleFrameAdvance: singleFrameAdvance, useRGBA: useRGBA, playAudio: playAudio);
 
@@ -77,7 +46,7 @@ namespace ConsoleGame.RayTracing
             threadpool = new FixedThreadFor(Environment.ProcessorCount, "Video Render Threads");
         }
 
-        public VideoRenderer(Framebuffer framebuffer, int cameraIndex, int superSample = 1, bool requestRGBA = false, bool singleFrameAdvance = false, float forcedAspect = 0.0f, bool enableDither = true, float ditherStrength = 0.12f)
+        public VideoRenderer(Framebuffer framebuffer, int cameraIndex, int superSample = 1, bool requestRGBA = false, bool singleFrameAdvance = false, float forcedAspect = 0.0f, bool enableDither = false, float ditherStrength = 0.0f)
         {
             if (framebuffer == null) throw new ArgumentNullException(nameof(framebuffer));
             fbW = framebuffer.Width;
@@ -87,8 +56,8 @@ namespace ConsoleGame.RayTracing
             hiH = fbH * 2 * ss;
 
             useRGBA = requestRGBA;
-            useDither = enableDither;
-            this.ditherStrength = Clamp01(ditherStrength);
+            useDither = false;
+            this.ditherStrength = 0.0f;
 
             reader = forcedAspect > 0.0f ? new AsyncCameraReader(cameraIndex, forcedAspect, singleFrameAdvance, useRGBA) : new AsyncCameraReader(cameraIndex, singleFrameAdvance, useRGBA);
 
@@ -146,8 +115,8 @@ namespace ConsoleGame.RayTracing
                                 float sxBot = (x + 0.5f - offX) / scale;
                                 float syBot = (yBot + 0.5f - offY) / scale;
 
-                                Vec3 cTop = SampleSource(ptr, srcW, srcH, bpp, sxTop, syTop);
-                                Vec3 cBot = SampleSource(ptr, srcW, srcH, bpp, sxBot, syBot);
+                                Vec3 cTop = SampleSourceLanczos(ptr, srcW, srcH, bpp, sxTop, syTop);
+                                Vec3 cBot = SampleSourceLanczos(ptr, srcW, srcH, bpp, sxBot, syBot);
 
                                 topSum = topSum + cTop;
                                 botSum = botSum + cBot;
@@ -158,15 +127,7 @@ namespace ConsoleGame.RayTracing
                         Vec3 topAvg = new Vec3(topSum.X * inv, topSum.Y * inv, topSum.Z * inv).Saturate();
                         Vec3 botAvg = new Vec3(botSum.X * inv, botSum.Y * inv, botSum.Z * inv).Saturate();
 
-                        if (useDither)
-                        {
-                            topAvg = ApplyOrderedDither(topAvg, cx, cy, true, ditherStrength);
-                            botAvg = ApplyOrderedDither(botAvg, cx, cy, false, ditherStrength);
-                        }
-
-                        ConsoleColor fg = NearestPalette(topAvg);
-                        ConsoleColor bg = NearestPalette(botAvg);
-                        target[cx, cy] = new Chexel('▀', fg, bg);
+                        target[cx, cy] = new Chexel('▀', topAvg, botAvg);
                     }
                 }
             });
@@ -191,43 +152,97 @@ namespace ConsoleGame.RayTracing
             reader?.Dispose();
         }
 
+        // --- Lanczos3 sampling (separable) ---
+
+        private const int LanczosA = 3;
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static ConsoleColor NearestPalette(Vec3 srgb)
+        private static float Sinc(float x)
         {
-            float r = srgb.X, g = srgb.Y, b = srgb.Z;
-            int bestIdx = 0;
-            float bestD = float.MaxValue;
-            for (int i = 0; i < Palette16.Length; i++)
+            x = MathF.Abs(x);
+            if (x < 1e-6f) return 1.0f;
+            float pix = MathF.PI * x;
+            return MathF.Sin(pix) / pix;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float LanczosKernel(float x, int a)
+        {
+            x = MathF.Abs(x);
+            if (x >= a) return 0.0f;
+            return Sinc(x) * Sinc(x / a);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int Clamp(int v, int lo, int hi)
+        {
+            if (v < lo) return lo;
+            if (v > hi) return hi;
+            return v;
+        }
+
+        private static Vec3 SampleSourceLanczos(IntPtr basePtr, int w, int h, int bpp, float x, float y)
+        {
+            if (w <= 0 || h <= 0) return Vec3.Zero;
+
+            int x0 = (int)MathF.Floor(x);
+            int y0 = (int)MathF.Floor(y);
+
+            int ixStart = x0 - (LanczosA - 1);
+            int ixEnd = x0 + LanczosA;
+            int iyStart = y0 - (LanczosA - 1);
+            int iyEnd = y0 + LanczosA;
+
+            float[] wx = new float[2 * LanczosA];
+            float[] wy = new float[2 * LanczosA];
+
+            float sumWx = 0.0f;
+            float sumWy = 0.0f;
+
+            for (int i = 0, ix = ixStart; ix <= ixEnd; ix++, i++)
             {
-                Vec3 p = Palette16[i];
-                float dr = r - p.X;
-                float dg = g - p.Y;
-                float db = b - p.Z;
-                float d = dr * dr + dg * dg + db * db;
-                if (d < bestD)
+                float k = LanczosKernel(x - ix, LanczosA);
+                wx[i] = k;
+                sumWx += k;
+            }
+            for (int j = 0, iy = iyStart; iy <= iyEnd; iy++, j++)
+            {
+                float k = LanczosKernel(y - iy, LanczosA);
+                wy[j] = k;
+                sumWy += k;
+            }
+
+            if (sumWx <= 0.0f || sumWy <= 0.0f) return SampleSourceBilinear(basePtr, w, h, bpp, x, y);
+
+            float invWx = 1.0f / sumWx;
+            float invWy = 1.0f / sumWy;
+
+            for (int i = 0; i < wx.Length; i++) wx[i] *= invWx;
+            for (int j = 0; j < wy.Length; j++) wy[j] *= invWy;
+
+            float rAcc = 0.0f, gAcc = 0.0f, bAcc = 0.0f;
+
+            for (int j = 0, iy = iyStart; iy <= iyEnd; iy++, j++)
+            {
+                int sy = Clamp(iy, 0, h - 1);
+                float wyj = wy[j];
+                for (int i = 0, ix = ixStart; ix <= ixEnd; ix++, i++)
                 {
-                    bestD = d;
-                    bestIdx = i;
+                    int sx = Clamp(ix, 0, w - 1);
+                    float r, g, b; LoadPixel(basePtr, w, bpp, sx, sy, out r, out g, out b);
+                    float wxy = wx[i] * wyj;
+                    rAcc += r * wxy;
+                    gAcc += g * wxy;
+                    bAcc += b * wxy;
                 }
             }
-            return (ConsoleColor)bestIdx;
+
+            return new Vec3(Clamp01(rAcc), Clamp01(gAcc), Clamp01(bAcc));
         }
 
+        // Fallback bilinear (used for degenerate cases)
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static Vec3 ApplyOrderedDither(Vec3 c, int cellX, int cellY, bool topHalf, float strength)
-        {
-            int dx = cellX & 7;
-            int dy = ((cellY << 1) | (topHalf ? 0 : 1)) & 7;
-            float t = Bayer8[dy, dx] - 0.5f;
-            float s = strength;
-            float r = Clamp01(c.X + t * s);
-            float g = Clamp01(c.Y + t * s);
-            float b = Clamp01(c.Z + t * s);
-            return new Vec3(r, g, b);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static Vec3 SampleSource(IntPtr basePtr, int w, int h, int bpp, float x, float y)
+        private static Vec3 SampleSourceBilinear(IntPtr basePtr, int w, int h, int bpp, float x, float y)
         {
             if (x < 0.0f || y < 0.0f || x > (w - 1) || y > (h - 1)) return Vec3.Zero;
 

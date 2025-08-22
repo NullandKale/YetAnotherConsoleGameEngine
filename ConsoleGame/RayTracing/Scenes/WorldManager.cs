@@ -7,6 +7,43 @@ using ConsoleGame.RayTracing.Objects;
 
 namespace ConsoleGame.RayTracing.Scenes
 {
+    /// <summary>
+    /// Compact integer 3D key for chunk coordinates with robust hashing.
+    /// </summary>
+    internal readonly struct Vec3i : IEquatable<Vec3i>
+    {
+        public readonly int X;
+        public readonly int Y;
+        public readonly int Z;
+
+        public Vec3i(int x, int y, int z)
+        {
+            X = x; Y = y; Z = z;
+        }
+
+        public bool Equals(Vec3i other) => X == other.X && Y == other.Y && Z == other.Z;
+        public override bool Equals(object obj) => obj is Vec3i v && Equals(v);
+
+        // FNV-1a 32-bit; same scheme used elsewhere in your project.
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                const uint FnvOffset = 2166136261u;
+                const uint FnvPrime = 16777619u;
+                uint h = FnvOffset;
+                h ^= (uint)X; h *= FnvPrime;
+                h ^= (uint)Y; h *= FnvPrime;
+                h ^= (uint)Z; h *= FnvPrime;
+                return (int)h;
+            }
+        }
+
+        public static bool operator ==(Vec3i a, Vec3i b) => a.Equals(b);
+        public static bool operator !=(Vec3i a, Vec3i b) => !a.Equals(b);
+        public override string ToString() => $"({X},{Y},{Z})";
+    }
+
     public sealed class WorldManager : IDisposable
     {
         private readonly Scene scene;
@@ -15,15 +52,27 @@ namespace ConsoleGame.RayTracing.Scenes
         private readonly Func<int, int, Material> materialLookup;
 
         private readonly List<VolumeGrid> volumeGrids = new List<VolumeGrid>();
-        private readonly Dictionary<(int, int, int), VolumeGrid> loadedChunkMap = new Dictionary<(int, int, int), VolumeGrid>();
+        private readonly Dictionary<Vec3i, VolumeGrid> loadedChunkMap = new Dictionary<Vec3i, VolumeGrid>();
 
-        // --- Streaming job system ---
+        // Chunk cache (LRU)
+        private readonly Dictionary<Vec3i, VolumeGrid> cachedChunkMap = new Dictionary<Vec3i, VolumeGrid>();
+        private readonly LinkedList<Vec3i> cacheLru = new LinkedList<Vec3i>();
+        private readonly Dictionary<Vec3i, LinkedListNode<Vec3i>> cacheNodes = new Dictionary<Vec3i, LinkedListNode<Vec3i>>();
+        private readonly int maxCachedChunks;
+
+        // Streaming job system
         private readonly ConcurrentQueue<BuildJob> jobQueue = new ConcurrentQueue<BuildJob>();
-        private readonly ConcurrentDictionary<(int, int, int), byte> inFlight = new ConcurrentDictionary<(int, int, int), byte>();
-        private readonly ConcurrentQueue<((int, int, int) key, VolumeGrid vg)> readyResults = new ConcurrentQueue<((int, int, int), VolumeGrid)>();
+        private readonly ConcurrentDictionary<Vec3i, byte> inFlight = new ConcurrentDictionary<Vec3i, byte>();
+        private readonly ConcurrentQueue<(Vec3i key, VolumeGrid vg)> readyResults = new ConcurrentQueue<(Vec3i, VolumeGrid)>();
         private readonly ManualResetEventSlim jobSignal = new ManualResetEventSlim(false);
         private readonly Thread[] workers;
         private volatile bool stop;
+
+        // Which chunks are currently attached (workers read this to avoid redundant work)
+        private readonly ConcurrentDictionary<Vec3i, byte> attached = new ConcurrentDictionary<Vec3i, byte>();
+
+        // Desired (in-view) chunk keys; we mutate by replacing the instance (safe publish)
+        private HashSet<Vec3i> desiredKeys = new HashSet<Vec3i>();
 
         private enum JobKind { Generate, FromWorldCells }
 
@@ -50,15 +99,21 @@ namespace ConsoleGame.RayTracing.Scenes
             this.config = config ?? throw new ArgumentNullException(nameof(config));
             this.materialLookup = materialLookup ?? throw new ArgumentNullException(nameof(materialLookup));
 
+            // Heuristic cache size: enough to remember a few rings beyond view.
+            int viewXZ = Math.Max(1, (2 * config.ViewDistanceChunks + 1));
+            maxCachedChunks = Math.Max(viewXZ * viewXZ * Math.Max(1, config.ChunksY) * 2, 256);
+
             int wc = Math.Max(1, Environment.ProcessorCount);
             workers = new Thread[wc];
             stop = false;
             for (int i = 0; i < wc; i++)
             {
                 int id = i;
-                workers[i] = new Thread(() => WorkerLoop(id));
-                workers[i].IsBackground = true;
-                workers[i].Name = "WorldMgr-" + id;
+                workers[i] = new Thread(() => WorkerLoop(id))
+                {
+                    IsBackground = true,
+                    Name = "WorldMgr-" + id
+                };
                 workers[i].Start();
             }
         }
@@ -72,61 +127,101 @@ namespace ConsoleGame.RayTracing.Scenes
             volumeGrids.Clear();
             loadedChunkMap.Clear();
             inFlight.Clear();
-            // Do not clear jobQueue; let workers drain or ignore obsolete work by key checks.
+            attached.Clear();
+
+            // Clear caches for a true reset (prevents mixing worlds/seeds)
+            cachedChunkMap.Clear();
+            cacheLru.Clear();
+            cacheNodes.Clear();
+
+            // Reset desired snapshot
+            Volatile.Write(ref desiredKeys, new HashSet<Vec3i>());
+            // Do not clear jobQueue; workers will ignore stale work via desired/attached checks.
         }
 
         public void LoadChunksAround(Vec3 center)
         {
-            int cxCenter = (int)Math.Floor(center.X / config.ChunkSize);
-            int czCenter = (int)Math.Floor(center.Z / config.ChunkSize);
+            // Compute the new desired set for this frame
+            var newDesired = BuildDesiredSet(center);
+
+            // Compute diffs vs last call
+            var prevDesired = Volatile.Read(ref desiredKeys);
+            var toAdd = new List<Vec3i>(capacity: newDesired.Count);
+            var toRemove = new List<Vec3i>(capacity: prevDesired.Count);
+
+            foreach (var key in newDesired)
+                if (!prevDesired.Contains(key)) toAdd.Add(key);
+
+            foreach (var key in prevDesired)
+                if (!newDesired.Contains(key)) toRemove.Add(key);
+
+            // Publish new desired set first so workers see the latest view
+            Volatile.Write(ref desiredKeys, newDesired);
+
+            // Attach / enqueue only what changed
+            for (int i = 0; i < toAdd.Count; i++)
+            {
+                var key = toAdd[i];
+
+                if (loadedChunkMap.ContainsKey(key))
+                    continue;
+
+                // Reattach from cache if present
+                if (TryAttachFromCache(key))
+                    continue;
+
+                // If not already scheduled, enqueue generation
+                if (!inFlight.TryAdd(key, 0))
+                    continue;
+
+                EnqueueGenerateJob(key.X, key.Y, key.Z);
+            }
+
+            // Detach chunks that left the view (cache them)
+            for (int i = 0; i < toRemove.Count; i++)
+            {
+                var key = toRemove[i];
+                if (!loadedChunkMap.TryGetValue(key, out var vg))
+                    continue;
+
+                CacheChunk(key, vg);
+
+                scene.Objects.Remove(vg);
+                volumeGrids.Remove(vg);
+                loadedChunkMap.Remove(key);
+                attached.TryRemove(key, out _);
+            }
+
+            // Integrate any finished builds from worker threads.
+            bool anyAdded = DrainReadyResults();
+            if (anyAdded || toAdd.Count > 0 || toRemove.Count > 0)
+            {
+                scene.RebuildBVH();
+            }
+        }
+
+        private HashSet<Vec3i> BuildDesiredSet(Vec3 center)
+        {
+            var set = new HashSet<Vec3i>();
+            int cxCenter = (int)MathF.Floor(center.X / config.ChunkSize);
+            int czCenter = (int)MathF.Floor(center.Z / config.ChunkSize);
 
             int minCX = cxCenter - config.ViewDistanceChunks;
             int maxCX = cxCenter + config.ViewDistanceChunks;
             int minCZ = czCenter - config.ViewDistanceChunks;
             int maxCZ = czCenter + config.ViewDistanceChunks;
 
-            // Enqueue missing chunks near the camera.
             for (int cx = minCX; cx <= maxCX; cx++)
             {
                 for (int cz = minCZ; cz <= maxCZ; cz++)
                 {
                     for (int cy = 0; cy < config.ChunksY; cy++)
                     {
-                        var key = (cx, cy, cz);
-                        if (loadedChunkMap.ContainsKey(key))
-                            continue;
-                        if (!inFlight.TryAdd(key, 0))
-                            continue;
-
-                        EnqueueGenerateJob(cx, cy, cz);
+                        set.Add(new Vec3i(cx, cy, cz));
                     }
                 }
             }
-
-            // Remove far chunks immediately on the main thread.
-            var toRemove = new List<(int, int, int)>();
-            foreach (var key in loadedChunkMap.Keys)
-            {
-                int cx = key.Item1, cy = key.Item2, cz = key.Item3;
-                if (cx < minCX || cx > maxCX || cz < minCZ || cz > maxCZ)
-                {
-                    toRemove.Add(key);
-                }
-            }
-            foreach (var key in toRemove)
-            {
-                var vg = loadedChunkMap[key];
-                scene.Objects.Remove(vg);
-                volumeGrids.Remove(vg);
-                loadedChunkMap.Remove(key);
-            }
-
-            // Integrate any finished builds from worker threads.
-            bool anyAdded = DrainReadyResults();
-            if (anyAdded || toRemove.Count > 0)
-            {
-                scene.RebuildBVH();
-            }
+            return set;
         }
 
         public void ReloadFromExistingFile(string filename, Vec3 worldMinCorner, Vec3 voxelSize, Func<int, int, Material> materialLookup, int chunkSize)
@@ -136,7 +231,7 @@ namespace ConsoleGame.RayTracing.Scenes
             if (!File.Exists(filename))
                 throw new FileNotFoundException("World file not found.", filename);
 
-            ClearLoadedVolumes();
+            ClearLoadedVolumes(); // also clears caches to avoid mixing persistent state
 
             (int, int)[,,] worldCells;
             int nx, ny, nz;
@@ -183,7 +278,7 @@ namespace ConsoleGame.RayTracing.Scenes
                     {
                         for (int cz = 0; cz < chunkCountZ; cz++)
                         {
-                            var key = (cx, cy, cz);
+                            var key = new Vec3i(cx, cy, cz);
                             inFlight.TryAdd(key, 0);
                             EnqueueFileJob(cx, cy, cz, worldCells, nx, ny, nz, worldMinCorner, voxelSize, chunkSize, group);
                         }
@@ -294,6 +389,7 @@ namespace ConsoleGame.RayTracing.Scenes
                 }
                 catch
                 {
+                    // swallow to keep workers alive
                 }
                 finally
                 {
@@ -305,9 +401,30 @@ namespace ConsoleGame.RayTracing.Scenes
             }
         }
 
+        private bool IsJobStillRelevant(Vec3i key)
+        {
+            // Snapshot desired set for thread-safe read
+            var desired = Volatile.Read(ref desiredKeys);
+            if (!desired.Contains(key))
+                return false;
+
+            // If already attached to the scene, no need to build
+            if (attached.ContainsKey(key))
+                return false;
+
+            return true;
+        }
+
         private void DoGenerateJob(int cx, int cy, int cz)
         {
-            var key = (cx, cy, cz);
+            var key = new Vec3i(cx, cy, cz);
+
+            // Early bailout for stale/duplicate work
+            if (!IsJobStillRelevant(key))
+            {
+                inFlight.TryRemove(key, out _);
+                return;
+            }
 
             var cells = new (int, int)[config.ChunkSize, config.ChunkSize, config.ChunkSize];
             bool anySolid;
@@ -336,7 +453,14 @@ namespace ConsoleGame.RayTracing.Scenes
             int cx = job.Cx;
             int cy = job.Cy;
             int cz = job.Cz;
-            var key = (cx, cy, cz);
+            var key = new Vec3i(cx, cy, cz);
+
+            // Early bailout for stale/duplicate work
+            if (!IsJobStillRelevant(key))
+            {
+                inFlight.TryRemove(key, out _);
+                return;
+            }
 
             int sx = Math.Min(job.ChunkSize, job.Nx - cx * job.ChunkSize);
             int sy = Math.Min(job.ChunkSize, job.Ny - cy * job.ChunkSize);
@@ -379,19 +503,102 @@ namespace ConsoleGame.RayTracing.Scenes
         private bool DrainReadyResults()
         {
             bool any = false;
+            var desired = Volatile.Read(ref desiredKeys);
+
             while (readyResults.TryDequeue(out var item))
             {
-                if (!loadedChunkMap.ContainsKey(item.key))
+                // If already attached (e.g., reattached from cache while job was running), just clear inFlight.
+                if (loadedChunkMap.ContainsKey(item.key) || attached.ContainsKey(item.key))
                 {
-                    volumeGrids.Add(item.vg);
-                    loadedChunkMap[item.key] = item.vg;
-                    scene.Objects.Add(item.vg);
-                    any = true;
+                    inFlight.TryRemove(item.key, out _);
+                    continue;
                 }
+
+                // If no longer desired, cache it instead of adding to the scene.
+                if (!desired.Contains(item.key))
+                {
+                    CacheChunk(item.key, item.vg);
+                    inFlight.TryRemove(item.key, out _);
+                    continue;
+                }
+
+                // Attach to scene
+                volumeGrids.Add(item.vg);
+                loadedChunkMap[item.key] = item.vg;
+                scene.Objects.Add(item.vg);
+                attached.TryAdd(item.key, 0);
+
                 inFlight.TryRemove(item.key, out _);
+                any = true;
             }
             return any;
         }
+
+        // -------------------- Cache helpers --------------------
+
+        private bool TryAttachFromCache(Vec3i key)
+        {
+            if (!cachedChunkMap.TryGetValue(key, out var vg))
+                return false;
+
+            // Remove from cache state
+            cachedChunkMap.Remove(key);
+            if (cacheNodes.TryGetValue(key, out var node))
+            {
+                cacheLru.Remove(node);
+                cacheNodes.Remove(key);
+            }
+
+            // Attach to scene
+            loadedChunkMap[key] = vg;
+            volumeGrids.Add(vg);
+            scene.Objects.Add(vg);
+            attached.TryAdd(key, 0);
+
+            // If a stale job is in flight/queue for this key, mark it not in-flight so it can be ignored fast.
+            inFlight.TryRemove(key, out _);
+
+            return true;
+        }
+
+        private void CacheChunk(Vec3i key, VolumeGrid vg)
+        {
+            // If it's already cached, just bump its LRU position.
+            if (cachedChunkMap.ContainsKey(key))
+            {
+                TouchLru(key);
+                return;
+            }
+
+            cachedChunkMap[key] = vg;
+            var node = cacheLru.AddFirst(key);
+            cacheNodes[key] = node;
+
+            // Evict least-recently-used if over capacity.
+            if (cachedChunkMap.Count > maxCachedChunks)
+            {
+                var tail = cacheLru.Last;
+                if (tail != null)
+                {
+                    var evictKey = tail.Value;
+                    cacheLru.RemoveLast();
+                    cacheNodes.Remove(evictKey);
+                    cachedChunkMap.Remove(evictKey);
+                    // If VolumeGrid needs disposal, do it here.
+                }
+            }
+        }
+
+        private void TouchLru(Vec3i key)
+        {
+            if (cacheNodes.TryGetValue(key, out var node))
+            {
+                cacheLru.Remove(node);
+                cacheLru.AddFirst(node);
+            }
+        }
+
+        // -----------------------------------------------------------
 
         public void Dispose()
         {

@@ -262,7 +262,7 @@ namespace NullEngine.Video
                     long sleepTime = nextFrameTime - timer.ElapsedMilliseconds;
                     if (sleepTime > 0)
                     {
-                        Thread.Sleep((int)Math.Max(1, sleepTime));
+                        Thread.Sleep((int)MathF.Max(1, sleepTime));
                     }
                 }
             }

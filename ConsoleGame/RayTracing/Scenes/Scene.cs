@@ -24,22 +24,34 @@ namespace ConsoleGame.RayTracing.Scenes
 
         private BVH bvh;
 
+        // Orbit state (toggle with Y)
+        private bool OrbitMode = false;
+        private Vec3 OrbitPivot = new Vec3(0.0, 0.0, 0.0);
+        private float OrbitRadius = 4.0f;                     // configurable; no longer overwritten on toggle
+        private float OrbitAngle = 0.0f;
+        private float OrbitY = 1.0f;
+        private float OrbitRadiansPerSecond = 0.5f;           // ~12.6s per revolution
+        private const float OrbitPivotAhead = 4.0f;           // center is 2 units ahead of camera when toggled
+        private float TimeMS = 0.0f;                          // accumulated simulation time (ms)
+        private float LastOrbitToggleMS = -1_000_000.0f;      // last time we toggled (ms)
+        private const float OrbitToggleDebounceMS = 200.0f;   // debounce window for Y (ms)
+
         public virtual void RebuildBVH()
         {
             bvh = new BVH(Objects);
         }
 
-        public virtual bool Hit(Ray r, float tMin, float tMax, ref HitRecord outRec)
+        public virtual bool Hit(Ray r, float tMin, float tMax, ref HitRecord outRec, float screenU, float screenV)
         {
             if (bvh == null) throw new InvalidOperationException("Scene BVH not built; call RebuildBVH() after populating Objects.");
-            return bvh.Hit(r, tMin, tMax, ref outRec);
+            return bvh.Hit(r, tMin, tMax, ref outRec, screenU, screenV);
         }
 
-        public virtual bool Occluded(Ray r, float maxDist)
+        public virtual bool Occluded(Ray r, float maxDist, float screenU, float screenV)
         {
             if (bvh == null) throw new InvalidOperationException("Scene BVH not built; call RebuildBVH() after populating Objects.");
             HitRecord rec = default;
-            return bvh.Hit(r, 0.001f, maxDist, ref rec);
+            return bvh.Hit(r, 0.001f, maxDist, ref rec, screenU, screenV);
         }
 
         public virtual void ResetCamera()
@@ -47,20 +59,63 @@ namespace ConsoleGame.RayTracing.Scenes
             CameraPos = DefaultCameraPos;
             Yaw = DefaultYaw;
             Pitch = DefaultPitch;
+            OrbitMode = false;
+            TimeMS = 0.0f;
+            LastOrbitToggleMS = -1_000_000.0f;
         }
 
         public virtual void Update(float deltaTimeMS)
         {
+            if (deltaTimeMS > 0.0f)
+            {
+                TimeMS += deltaTimeMS;
+            }
+
+            if (!OrbitMode)
+            {
+                return;
+            }
+
+            float dt = deltaTimeMS * 0.001f;
+            if (dt <= 0.0f)
+            {
+                return;
+            }
+
+            OrbitAngle += OrbitRadiansPerSecond * dt;
+
+            float rx = MathF.Cos(OrbitAngle) * OrbitRadius;
+            float rz = MathF.Sin(OrbitAngle) * OrbitRadius;
+
+            CameraPos = new Vec3(OrbitPivot.X + rx, OrbitY, OrbitPivot.Z + rz);
+
+            float dx = (float)(OrbitPivot.X - CameraPos.X);
+            float dy = (float)(OrbitPivot.Y - CameraPos.Y);
+            float dz = (float)(OrbitPivot.Z - CameraPos.Z);
+            float horiz = MathF.Max(1e-6f, MathF.Sqrt(dx * dx + dz * dz));
+
+            Yaw = MathF.Atan2(dx, -dz);
+            Pitch = MathF.Atan2(dy, horiz);
+
+            float limit = (MathF.PI * 0.5f) - 0.01f;
+            if (Pitch > limit)
+            {
+                Pitch = limit;
+            }
+            if (Pitch < -limit)
+            {
+                Pitch = -limit;
+            }
         }
 
         public virtual void HandleInput(ConsoleKeyInfo keyInfo, float dt)
         {
-            float moveSpeed = 3.0f;
-            float rotSpeed = 1.8f;
+            float moveSpeed = 6.0f;
+            float rotSpeed = 2.2f;
 
             if (keyInfo.Modifiers == ConsoleModifiers.Shift)
             {
-                moveSpeed *= 2;
+                moveSpeed *= 10;
                 rotSpeed *= 2;
             }
 
@@ -133,6 +188,28 @@ namespace ConsoleGame.RayTracing.Scenes
             if (keyInfo.Key == ConsoleKey.Q)
             {
                 CameraPos = CameraPos - up * (moveSpeed * dt);
+            }
+
+            if (keyInfo.Key == ConsoleKey.Y)
+            {
+                if (TimeMS - LastOrbitToggleMS >= OrbitToggleDebounceMS)
+                {
+                    LastOrbitToggleMS = TimeMS;
+                    if (!OrbitMode)
+                    {
+                        OrbitPivot = CameraPos + forwardXZ * OrbitPivotAhead;
+                        OrbitY = (float)CameraPos.Y;
+                        float dx = (float)(CameraPos.X - OrbitPivot.X);
+                        float dz = (float)(CameraPos.Z - OrbitPivot.Z);
+                        OrbitAngle = MathF.Atan2(dz, dx);
+                        CameraPos = new Vec3(OrbitPivot.X + MathF.Cos(OrbitAngle) * OrbitRadius, OrbitY, OrbitPivot.Z + MathF.Sin(OrbitAngle) * OrbitRadius);
+                        OrbitMode = true;
+                    }
+                    else
+                    {
+                        OrbitMode = false;
+                    }
+                }
             }
         }
 

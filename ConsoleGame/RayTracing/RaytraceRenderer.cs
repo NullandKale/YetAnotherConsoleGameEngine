@@ -13,12 +13,12 @@ namespace ConsoleGame.RayTracing
     {
         private readonly Scene scene;
         private float fovDeg;
-        private readonly int hiW;
-        private readonly int hiH;
-        private readonly int ss;
+        private int hiW;
+        private int hiH;
+        private int ss;
 
-        private readonly int fbW;
-        private readonly int fbH;
+        private int fbW;
+        private int fbH;
 
         private Chexel[,] frameBuffer;
 
@@ -29,8 +29,8 @@ namespace ConsoleGame.RayTracing
         private float yaw = 0.0f;
         private float pitch = 0.0f;
 
-        private const int DiffuseBounces = 1;
-        private const int IndirectSamples = 1;
+        private const int DiffuseBounces = 2;
+        private const int IndirectSamples = 2;
         private const int MaxMirrorBounces = 2;
         private const float MirrorThreshold = 0.9f;
         private const float Eps = 1e-4f;
@@ -38,39 +38,19 @@ namespace ConsoleGame.RayTracing
         private const float MaxLuminance = 1.0f;
         private const ulong SeedSalt = 0x9E3779B97F4A7C15UL;
 
-        private static readonly Vec3[] Palette16 = new Vec3[]
-        {
-            new Vec3(0.00f,0.00f,0.00f),
-            new Vec3(0.00f,0.00f,0.50f),
-            new Vec3(0.00f,0.50f,0.00f),
-            new Vec3(0.00f,0.50f,0.50f),
-            new Vec3(0.50f,0.00f,0.00f),
-            new Vec3(0.50f,0.00f,0.50f),
-            new Vec3(0.50f,0.50f,0.00f),
-            new Vec3(0.75f,0.75f,0.75f),
-            new Vec3(0.50f,0.50f,0.50f),
-            new Vec3(0.00f,0.00f,1.00f),
-            new Vec3(0.00f,1.00f,0.00f),
-            new Vec3(0.00f,1.00f,1.00f),
-            new Vec3(1.00f,0.00f,0.00f),
-            new Vec3(1.00f,0.00f,1.00f),
-            new Vec3(1.00f,1.00f,0.00f),
-            new Vec3(1.00f,1.00f,1.00f)
-        };
-
-        private readonly Vec3[,] history;
+        private Vec3[,] history;
         private bool historyValid = false;
-        private float taaAlpha = 0.15f;
+        private float taaAlpha = 0.05f;
         private const float MotionTransReset = 0.0025f;
         private const float MotionRotReset = 0.0025f;
 
-        private double lastCamX = double.NaN;
-        private double lastCamY = double.NaN;
-        private double lastCamZ = double.NaN;
+        private float lastCamX = float.NaN;
+        private float lastCamY = float.NaN;
+        private float lastCamZ = float.NaN;
         private float lastYaw = float.NaN;
         private float lastPitch = float.NaN;
 
-        private readonly Ray[,] rays; // hi-res ray buffer generated in its own phase
+        private Ray[,] rays; // hi-res ray buffer generated in its own phase
 
         private FixedThreadFor threadpool;
 
@@ -92,6 +72,29 @@ namespace ConsoleGame.RayTracing
             rays = new Ray[hiW, hiH];
 
             scene.RebuildBVH();
+        }
+
+        public void Resize(Framebuffer framebuffer, int superSample)
+        {
+            if (framebuffer == null) throw new ArgumentNullException(nameof(framebuffer));
+            ss = Math.Max(1, superSample);
+
+            fbW = framebuffer.Width;
+            fbH = framebuffer.Height;
+
+            hiW = fbW * ss;
+            hiH = fbH * 2 * ss;
+
+            frameBuffer = new Chexel[fbW, fbH];
+            history = new Vec3[hiW, hiH];
+            rays = new Ray[hiW, hiH];
+
+            historyValid = false;
+            lastCamX = float.NaN;
+            lastCamY = float.NaN;
+            lastCamZ = float.NaN;
+            lastYaw = float.NaN;
+            lastPitch = float.NaN;
         }
 
         public void SetCamera(Vec3 pos, float yaw, float pitch)
@@ -131,9 +134,14 @@ namespace ConsoleGame.RayTracing
             int procCount = Math.Max(1, Environment.ProcessorCount);
             long frame = Interlocked.Increment(ref frameCounter);
 
+            // Per-frame TAA jitter using Halton(2,3), in pixel units [-0.5, 0.5)
+            int frameIdx = unchecked((int)(frame & 0x7fffffff));
+            float jitterX = Halton(frameIdx + 1, 2) - 0.5f;
+            float jitterY = Halton(frameIdx + 1, 3) - 0.5f;
+
             Chexel[,] target = frameBuffer;
 
-            // Phase 0: generate all hi-res rays in parallel
+            // Phase 0: generate all hi-res rays in parallel (with camera jitter)
             threadpool.For(0, procCount, worker =>
             {
                 int yStart = worker * hiH / procCount;
@@ -142,7 +150,7 @@ namespace ConsoleGame.RayTracing
                 {
                     for (int px = 0; px < hiW; px++)
                     {
-                        rays[px, py] = cam.MakeRay(px, py, hiW, hiH);
+                        rays[px, py] = MakeJitteredRay(camPosSnapshot, yawSnapshot, pitchSnapshot, fovDeg, aspect, px, py, hiW, hiH, jitterX, jitterY);
                     }
                 }
             });
@@ -157,7 +165,9 @@ namespace ConsoleGame.RayTracing
                     for (int px = 0; px < hiW; px++)
                     {
                         Rng rng = new Rng(PerFrameSeed(px, py, frame, 0, 0));
-                        Vec3 cur = TraceFull(scene, rays[px, py], 0, 0, ref rng);
+                        float uCenter = (px + 0.5f) / hiW;
+                        float vCenter = (py + 0.5f) / hiH;
+                        Vec3 cur = TraceFull(scene, rays[px, py], 0, 0, ref rng, uCenter, vCenter);
                         cur = ClampLuminance(cur, MaxLuminance).Saturate();
                         Vec3 prev = history[px, py];
                         float ia = 1.0f - blendAlpha;
@@ -167,7 +177,7 @@ namespace ConsoleGame.RayTracing
                 }
             });
 
-            // Phase 2: downsample history into console cells and quantize
+            // Phase 2: downsample history into console cells and write high-precision colors
             threadpool.For(0, procCount, worker =>
             {
                 int yStart = worker * fbH / procCount;
@@ -195,9 +205,9 @@ namespace ConsoleGame.RayTracing
                         float inv = 1.0f / (ss * ss);
                         Vec3 topAvg = new Vec3(topSum.X * inv, topSum.Y * inv, topSum.Z * inv).Saturate();
                         Vec3 botAvg = new Vec3(botSum.X * inv, botSum.Y * inv, botSum.Z * inv).Saturate();
-                        ConsoleColor fg = NearestPalette(topAvg);
-                        ConsoleColor bg = NearestPalette(botAvg);
-                        target[cx, cy] = new Chexel('▀', fg, bg);
+
+                        // Store full-precision colors in Chexel; terminal will quantize as needed.
+                        target[cx, cy] = new Chexel('▀', topAvg, botAvg);
                     }
                 }
             });
@@ -226,10 +236,10 @@ namespace ConsoleGame.RayTracing
 
         private bool ShouldResetHistory(Vec3 cam, float y, float p)
         {
-            double dx = cam.X - lastCamX;
-            double dy = cam.Y - lastCamY;
-            double dz = cam.Z - lastCamZ;
-            double trans = double.IsNaN(dx) ? 0.0 : Math.Sqrt(dx * dx + dy * dy + dz * dz);
+            float dx = cam.X - lastCamX;
+            float dy = cam.Y - lastCamY;
+            float dz = cam.Z - lastCamZ;
+            float trans = float.IsNaN(dx) ? 0.0f : MathF.Sqrt(dx * dx + dy * dy + dz * dz);
             float dyaw = float.IsNaN(lastYaw) ? 0.0f : MathF.Abs(y - lastYaw);
             float dpitch = float.IsNaN(lastPitch) ? 0.0f : MathF.Abs(p - lastPitch);
             return trans > MotionTransReset || dyaw > MotionRotReset || dpitch > MotionRotReset;
@@ -247,10 +257,38 @@ namespace ConsoleGame.RayTracing
             return new Vec3(MathF.Sin(yaw) * cp, MathF.Sin(pitch), -MathF.Cos(yaw) * cp);
         }
 
-        private static Vec3 TraceFull(Scene scene, Ray r, int mirrorDepth, int diffuseDepth, ref Rng rng)
+        private static Ray MakeJitteredRay(Vec3 camPos, float yaw, float pitch, float fovDeg, float aspect, int px, int py, int W, int H, float jitterX, float jitterY)
+        {
+            float u = ((px + 0.5f + jitterX) / W) * 2.0f - 1.0f;
+            float v = 1.0f - ((py + 0.5f + jitterY) / H) * 2.0f;
+            float fovRad = fovDeg * (MathF.PI / 180.0f);
+            float halfH = MathF.Tan(0.5f * fovRad);
+            float halfW = halfH * aspect;
+            Vec3 fwd = ForwardFromYawPitch(yaw, pitch).Normalized();
+            Vec3 worldUp = new Vec3(0.0, 1.0, 0.0);
+            Vec3 right = fwd.Cross(worldUp).Normalized();
+            Vec3 up = right.Cross(fwd).Normalized();
+            Vec3 dir = (fwd + right * (u * halfW) + up * (v * halfH)).Normalized();
+            return new Ray(camPos, dir);
+        }
+
+        private static float Halton(int index, int b)
+        {
+            float f = 1.0f;
+            float r = 0.0f;
+            while (index > 0)
+            {
+                f /= b;
+                r += f * (index % b);
+                index /= b;
+            }
+            return r;
+        }
+
+        private static Vec3 TraceFull(Scene scene, Ray r, int mirrorDepth, int diffuseDepth, ref Rng rng, float screenU, float screenV)
         {
             HitRecord rec = default;
-            if (!scene.Hit(r, 0.001f, float.MaxValue, ref rec))
+            if (!scene.Hit(r, 0.001f, float.MaxValue, ref rec, screenU, screenV))
             {
                 float tbg = 0.5f * (r.Dir.Y + 1.0f);
                 return Lerp(scene.BackgroundBottom, scene.BackgroundTop, tbg);
@@ -261,7 +299,7 @@ namespace ConsoleGame.RayTracing
                 if (mirrorDepth >= MaxMirrorBounces) return color;
                 Vec3 reflDir = Reflect(r.Dir, rec.N).Normalized();
                 Ray reflRay = new Ray(rec.P + rec.N * Eps, reflDir);
-                Vec3 reflCol = TraceFull(scene, reflRay, mirrorDepth + 1, diffuseDepth, ref rng);
+                Vec3 reflCol = TraceFull(scene, reflRay, mirrorDepth + 1, diffuseDepth, ref rng, screenU, screenV);
                 color += new Vec3(reflCol.X * rec.Mat.Albedo.X, reflCol.Y * rec.Mat.Albedo.Y, reflCol.Z * rec.Mat.Albedo.Z);
                 return color;
             }
@@ -280,7 +318,7 @@ namespace ConsoleGame.RayTracing
                 float nDotL = MathF.Max(0.0f, rec.N.Dot(ldir));
                 if (nDotL <= 0.0) continue;
                 Ray shadow = new Ray(rec.P + rec.N * Eps, ldir);
-                if (scene.Occluded(shadow, dist - Eps)) continue;
+                if (scene.Occluded(shadow, dist - Eps, screenU, screenV)) continue;
                 float atten = light.Intensity / dist2;
                 Vec3 lambert = rec.Mat.Albedo * (nDotL * atten) * light.Color;
                 color += lambert;
@@ -292,7 +330,7 @@ namespace ConsoleGame.RayTracing
                 {
                     Vec3 bounceDir = CosineSampleHemisphere(rec.N, ref rng);
                     Ray bounce = new Ray(rec.P + rec.N * Eps, bounceDir);
-                    Vec3 Li = TraceFull(scene, bounce, mirrorDepth, diffuseDepth + 1, ref rng);
+                    Vec3 Li = TraceFull(scene, bounce, mirrorDepth, diffuseDepth + 1, ref rng, screenU, screenV);
                     indirect += new Vec3(Li.X * rec.Mat.Albedo.X, Li.Y * rec.Mat.Albedo.Y, Li.Z * rec.Mat.Albedo.Z);
                 }
                 float invSpp = 1.0f / IndirectSamples;
@@ -359,28 +397,6 @@ namespace ConsoleGame.RayTracing
             if (y <= maxY) return c;
             float s = maxY / MathF.Max(y, 1e-6f);
             return new Vec3(c.X * s, c.Y * s, c.Z * s);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static ConsoleColor NearestPalette(Vec3 srgb)
-        {
-            float r = srgb.X, g = srgb.Y, b = srgb.Z;
-            int bestIdx = 0;
-            float bestD = float.MaxValue;
-            for (int i = 0; i < Palette16.Length; i++)
-            {
-                Vec3 p = Palette16[i];
-                float dr = r - p.X;
-                float dg = g - p.Y;
-                float db = b - p.Z;
-                float d = dr * dr + dg * dg + db * db;
-                if (d < bestD)
-                {
-                    bestD = d;
-                    bestIdx = i;
-                }
-            }
-            return (ConsoleColor)bestIdx;
         }
     }
 }

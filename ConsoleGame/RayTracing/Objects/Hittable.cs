@@ -6,7 +6,7 @@ namespace ConsoleGame.RayTracing.Objects
 {
     public abstract class Hittable
     {
-        public abstract bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec);
+        public abstract bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec, float screenU, float screenV);
     }
 
     public sealed class Sphere : Hittable
@@ -22,7 +22,7 @@ namespace ConsoleGame.RayTracing.Objects
             Mat = m;
         }
 
-        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec)
+        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec, float screenU, float screenV)
         {
             Vec3 oc = r.Origin - Center;
             float a = r.Dir.Dot(r.Dir);
@@ -70,10 +70,10 @@ namespace ConsoleGame.RayTracing.Objects
             Reflectivity = reflectivity;
         }
 
-        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec)
+        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec, float screenU, float screenV)
         {
             float denom = Normal.Dot(r.Dir);
-            if (Math.Abs(denom) < 1e-6)
+            if (MathF.Abs(denom) < 1e-6)
             {
                 return false;
             }
@@ -112,10 +112,10 @@ namespace ConsoleGame.RayTracing.Objects
             Reflectivity = reflectivity;
         }
 
-        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec)
+        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec, float screenU, float screenV)
         {
             float denom = Normal.Dot(r.Dir);
-            if (Math.Abs(denom) < 1e-6)
+            if (MathF.Abs(denom) < 1e-6)
             {
                 return false;
             }
@@ -164,9 +164,9 @@ namespace ConsoleGame.RayTracing.Objects
             Reflectivity = reflectivity;
         }
 
-        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec)
+        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec, float screenU, float screenV)
         {
-            if (Math.Abs(r.Dir.Z) < 1e-8)
+            if (MathF.Abs(r.Dir.Z) < 1e-8)
             {
                 return false;
             }
@@ -216,9 +216,9 @@ namespace ConsoleGame.RayTracing.Objects
             Reflectivity = reflectivity;
         }
 
-        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec)
+        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec, float screenU, float screenV)
         {
-            if (Math.Abs(r.Dir.Y) < 1e-8)
+            if (MathF.Abs(r.Dir.Y) < 1e-8)
             {
                 return false;
             }
@@ -268,9 +268,9 @@ namespace ConsoleGame.RayTracing.Objects
             Reflectivity = reflectivity;
         }
 
-        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec)
+        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec, float screenU, float screenV)
         {
-            if (Math.Abs(r.Dir.X) < 1e-8)
+            if (MathF.Abs(r.Dir.X) < 1e-8)
             {
                 return false;
             }
@@ -316,14 +316,14 @@ namespace ConsoleGame.RayTracing.Objects
             faces.Add(new YZRect(min.Y, max.Y, min.Z, max.Z, min.X, matFunc, specular, reflectivity));
         }
 
-        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec)
+        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec, float screenU, float screenV)
         {
             bool hitAnything = false;
             float closest = tMax;
             HitRecord temp = default;
             for (int i = 0; i < faces.Count; i++)
             {
-                if (faces[i].Hit(r, tMin, closest, ref temp))
+                if (faces[i].Hit(r, tMin, closest, ref temp, screenU, screenV))
                 {
                     hitAnything = true;
                     closest = temp.T;
@@ -348,13 +348,13 @@ namespace ConsoleGame.RayTracing.Objects
         {
             Center = center;
             Radius = radius;
-            YMin = Math.Min(yMin, yMax);
-            YMax = Math.Max(yMin, yMax);
+            YMin = MathF.Min(yMin, yMax);
+            YMax = MathF.Max(yMin, yMax);
             Capped = capped;
             Mat = mat;
         }
 
-        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec)
+        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec, float screenU, float screenV)
         {
             float ox = r.Origin.X - Center.X;
             float oz = r.Origin.Z - Center.Z;
@@ -400,7 +400,7 @@ namespace ConsoleGame.RayTracing.Objects
             }
             if (Capped)
             {
-                if (Math.Abs(r.Dir.Y) > 1e-8)
+                if (MathF.Abs(r.Dir.Y) > 1e-8)
                 {
                     float tTop = (YMax - r.Origin.Y) / r.Dir.Y;
                     if (tTop > tMin && tTop < tMax)

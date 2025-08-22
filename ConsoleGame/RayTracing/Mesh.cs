@@ -22,9 +22,9 @@ namespace ConsoleGame.RayTracing
             //bvh = new BVH(triangles);
         }
 
-        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec)
+        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec, float screenU, float screenV)
         {
-            return bvh.Hit(r, tMin, tMax, ref rec);
+            return bvh.Hit(r, tMin, tMax, ref rec, screenU, screenV);
         }
 
         public static Mesh FromObj(string path, Material defaultMaterial, float scale = 1.0f, Vec3? translate = null)

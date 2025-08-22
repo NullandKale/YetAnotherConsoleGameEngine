@@ -15,11 +15,13 @@ namespace ConsoleGame.Renderer
         private Framebuffer entityFramebuffer;
         private string debugString = "";
 
+        public event Action<int, int> Resized;
+
         public Terminal()
         {
-            //renderer = new TerminalRenderer();
-            renderer = new ANSITerminalRenderer();
-            //renderer = new Win32TerminalRenderer();
+            //renderer = new TerminalRenderer(OnResized);
+            renderer = new ANSITerminalRenderer(OnResized);
+            //renderer = new Win32TerminalRenderer(OnResized);
             input = new TerminalInput();
             isRunning = false;
             stopwatch = new Stopwatch();
@@ -30,9 +32,28 @@ namespace ConsoleGame.Renderer
             renderer.AddFrameBuffer(entityFramebuffer);
         }
 
+        public void OnResized(int width, int height)
+        {
+            Framebuffer old = entityFramebuffer;
+            entityFramebuffer = new Framebuffer(width, height);
+            renderer.RemoveFrameBuffer(old);
+            renderer.AddFrameBuffer(entityFramebuffer);
+            Resized?.Invoke(width, height);
+        }
+
+        public void AddResizedCallback(Action<int, int> callback)
+        {
+            if (callback != null) Resized += callback;
+        }
+
+        public void RemoveResizedCallback(Action<int, int> callback)
+        {
+            if (callback != null) Resized -= callback;
+        }
+
         public void SetDebugString(string str)
         {
-            if(str != null)
+            if (str != null)
             {
                 debugString = str;
             }
@@ -64,35 +85,28 @@ namespace ConsoleGame.Renderer
                 return;
 
             isRunning = true;
-            Console.CancelKeyPress += OnCancelKeyPress; // Handle Ctrl+C to stop the loop gracefully
+            Console.CancelKeyPress += OnCancelKeyPress;
 
-            stopwatch.Start(); // Start the stopwatch to measure delta time
+            stopwatch.Start();
 
             while (isRunning)
             {
-                // Calculate delta time (time elapsed since the last frame)
                 double deltaTime = stopwatch.Elapsed.TotalSeconds;
-                stopwatch.Restart(); // Reset the stopwatch for the next frame
+                stopwatch.Restart();
 
-                // Update input
                 input.Update();
 
-                // Process input
                 while (input.TryGetKey(out ConsoleKeyInfo keyInfo))
                 {
                     HandleInput(keyInfo);
                 }
 
-                // Update game logic using delta time
                 Update(deltaTime);
 
-                // Draw entities to the entity framebuffer
                 DrawEntities();
 
-                // Render the current frame
                 renderer.Render();
 
-                // HUD: print current fps and ms per frame on the last console line
                 double frameMs = stopwatch.Elapsed.TotalMilliseconds;
                 double fps = frameMs > 0.0 ? 1000.0 / frameMs : 0.0;
                 string hud = $"{debugString} fps: {fps:0.0}  ms: {frameMs:0.00}";
@@ -105,12 +119,11 @@ namespace ConsoleGame.Renderer
                 {
                     hud = hud.Substring(0, hudlen);
                 }
-                //Console.SetCursorPosition(0, renderer.consoleHeight);
                 Console.Write(hud);
             }
 
-            stopwatch.Stop(); // Stop the stopwatch
-            Console.CancelKeyPress -= OnCancelKeyPress; // Clean up event handler
+            stopwatch.Stop();
+            Console.CancelKeyPress -= OnCancelKeyPress;
         }
 
         public void Stop()
@@ -120,8 +133,8 @@ namespace ConsoleGame.Renderer
 
         private void OnCancelKeyPress(object sender, ConsoleCancelEventArgs e)
         {
-            e.Cancel = true; // Prevent the program from terminating immediately
-            Stop(); // Stop the render loop gracefully
+            e.Cancel = true;
+            Stop();
         }
 
         private void HandleInput(ConsoleKeyInfo keyInfo)
@@ -147,10 +160,8 @@ namespace ConsoleGame.Renderer
 
         private void DrawEntities()
         {
-            // Clear the entity framebuffer
             entityFramebuffer.Clear();
 
-            // Draw each entity to the entity framebuffer
             foreach (var entity in entities)
             {
                 if (entity.X >= 0 && entity.X < entityFramebuffer.Width &&

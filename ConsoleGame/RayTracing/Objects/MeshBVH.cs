@@ -128,7 +128,7 @@ namespace ConsoleGame.RayTracing.Objects
             leafTriIndex = leafIndices.ToArray();
         }
 
-        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec)
+        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec, float screenU, float screenV)
         {
             if (rootIndex < 0)
             {

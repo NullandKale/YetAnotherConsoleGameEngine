@@ -97,7 +97,7 @@ namespace ConsoleGame.RayTracing.Objects
             leafObjIndex = leafIndices.ToArray();
         }
 
-        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec)
+        public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec, float screenU, float screenV)
         {
             if (rootIndex < 0)
             {
@@ -141,7 +141,7 @@ namespace ConsoleGame.RayTracing.Objects
                     {
                         int objId = leafObjIndex[start + i];
                         HitRecord tmp = default;
-                        if (objectsSoA[objId].Hit(r, tMin, closest, ref tmp))
+                        if (objectsSoA[objId].Hit(r, tMin, closest, ref tmp, screenU, screenV))
                         {
                             hitAnything = true;
                             closest = tmp.T;
