@@ -309,6 +309,7 @@ public partial class RaytraceEntity : BaseComponent
         List<Func<Scene>> list =
         [
             () => TestScenes.BuildTestScene(),
+            () => Scenes.BuildTextureTestScene(),
             () => Scenes.BuildTestScene(),
             () => Scenes.BuildDemoScene(),
             () => Scenes.BuildCornellBox(),

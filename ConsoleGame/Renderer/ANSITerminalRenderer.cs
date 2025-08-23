@@ -13,17 +13,14 @@ namespace ConsoleGame.Renderer
         private readonly ConsoleColor defaultBg;
         private readonly Action<int, int> onResize;
 
-        // Fast path: write bytes directly to console handle once per frame
         private readonly bool isWindows;
         private readonly bool vtEnabled;
         private readonly IntPtr hStdOut;
-        private readonly byte[] zeroSeq = new byte[] { 0x1B, (byte)'[', (byte)'0', (byte)'m' }; // "\x1b[0m"
+        private readonly byte[] zeroSeq = new byte[] { 0x1B, (byte)'[', (byte)'0', (byte)'m' };
 
-        // Single reusable output buffer; grown on demand
-        private byte[] outBuf = new byte[1 << 20]; // 1 MB to start; will grow if needed
+        private byte[] outBuf = new byte[1 << 20];
         private int outLen = 0;
 
-        // Precomputed tables for better ANSI color mapping
         private static readonly byte[] s_cubeSrgb = new byte[] { 0, 95, 135, 175, 215, 255 };
         private static readonly double[] s_cubeLinear = new double[6];
         private static readonly byte[] s_graySrgb = new byte[24];
@@ -58,16 +55,14 @@ namespace ConsoleGame.Renderer
             if (isWindows)
             {
                 hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
-                // Enable VT and UTF-8 output so our bytes map predictably.
                 vtEnabled = EnableVirtualTerminalProcessing(hStdOut);
                 SetConsoleOutputCP(65001);
             }
             else
             {
-                vtEnabled = true; // VT on by default in most non-Windows terminals
+                vtEnabled = true;
             }
 
-            // Hide cursor
             AppendAscii("\x1b[?25l");
             Flush();
             outLen = 0;
@@ -118,7 +113,6 @@ namespace ConsoleGame.Renderer
 
             if (sizeChanged)
             {
-                // Clear screen & home
                 AppendAscii("\x1b[2J\x1b[H");
             }
 
@@ -127,7 +121,6 @@ namespace ConsoleGame.Renderer
 
             for (int y = 0; y < consoleHeight; y++)
             {
-                // Move cursor to (y+1, 1)
                 AppendAscii("\x1b[");
                 AppendInt(y + 1);
                 AppendAscii(";1H");
@@ -167,14 +160,11 @@ namespace ConsoleGame.Renderer
                 }
             }
 
-            // Reset attributes
             AppendBytes(zeroSeq);
 
             Flush();
             outLen = 0;
         }
-
-        // ===== Byte buffer helpers =====
 
         private void EnsureCapacity(int neededAdditional)
         {
@@ -191,7 +181,7 @@ namespace ConsoleGame.Renderer
             EnsureCapacity(n);
             for (int i = 0; i < n; i++)
             {
-                outBuf[outLen++] = (byte)s[i]; // s must be pure ASCII
+                outBuf[outLen++] = (byte)s[i];
             }
         }
 
@@ -204,7 +194,6 @@ namespace ConsoleGame.Renderer
 
         private void AppendInt(int v)
         {
-            // Fast positive int to ASCII (v >= 0)
             if (v == 0)
             {
                 EnsureCapacity(1);
@@ -228,7 +217,6 @@ namespace ConsoleGame.Renderer
 
         private void AppendCharUtf8(char ch)
         {
-            // Encode single UTF-16 code unit to UTF-8 (BMP only)
             if (ch <= 0x7F)
             {
                 EnsureCapacity(1);
@@ -255,12 +243,10 @@ namespace ConsoleGame.Renderer
 
             if (isWindows)
             {
-                // Single WriteFile call per frame
                 WriteFile(hStdOut, outBuf, outLen, out _, IntPtr.Zero);
             }
             else
             {
-                // Portable fallback
                 using (var stdout = Console.OpenStandardOutput())
                 {
                     stdout.Write(outBuf, 0, outLen);
@@ -269,7 +255,7 @@ namespace ConsoleGame.Renderer
             }
         }
 
-        // ===== ANSI 256 mapping from f32 color (improved) =====
+        // ===== ANSI 256 mapping (sRGB distance, gray only for near-gray colors) =====
 
         private static int ChexelToAnsi256(ChexelColor cc)
         {
@@ -289,22 +275,26 @@ namespace ConsoleGame.Renderer
             int ib = ToCubeLevelSrgb(bSrgb);
             int idxCube = 16 + 36 * ir + 6 * ig + ib;
 
-            double cr = s_cubeLinear[ir];
-            double cg = s_cubeLinear[ig];
-            double cb = s_cubeLinear[ib];
+            int cubeR = s_cubeSrgb[ir];
+            int cubeG = s_cubeSrgb[ig];
+            int cubeB = s_cubeSrgb[ib];
 
-            double yLin = 0.2126 * rLin + 0.7152 * gLin + 0.0722 * bLin;
-            if (yLin < 0.0) yLin = 0.0;
-            if (yLin > 1.0) yLin = 1.0;
-            byte ySrgb = LinearToSrgb8(yLin);
+            byte ySrgb = LinearToSrgb8(0.2126 * rLin + 0.7152 * gLin + 0.0722 * bLin);
             int grayIdx = (int)Math.Round((ySrgb - 8.0) / 10.0);
             if (grayIdx < 0) grayIdx = 0;
             if (grayIdx > 23) grayIdx = 23;
-            double gv = s_grayLinear[grayIdx];
+            int grayV = s_graySrgb[grayIdx];
             int idxGray = 232 + grayIdx;
 
-            double dCube = WeightedDist2Linear(rLin, gLin, bLin, cr, cg, cb);
-            double dGray = WeightedDist2Linear(rLin, gLin, bLin, gv, gv, gv);
+            int drg = Math.Abs(rSrgb - gSrgb);
+            int drb = Math.Abs(rSrgb - bSrgb);
+            int dgb = Math.Abs(gSrgb - bSrgb);
+            int chroma = Math.Max(drg, Math.Max(drb, dgb));
+
+            bool allowGray = chroma <= 18;
+
+            int dCube = Dist2Srgb(rSrgb, gSrgb, bSrgb, cubeR, cubeG, cubeB);
+            int dGray = allowGray ? Dist2Srgb(rSrgb, gSrgb, bSrgb, grayV, grayV, grayV) + 64 : int.MaxValue;
 
             return dGray < dCube ? idxGray : idxCube;
         }
@@ -323,9 +313,7 @@ namespace ConsoleGame.Renderer
         {
             if (c < 0.0) c = 0.0;
             if (c > 1.0) c = 1.0;
-            double s;
-            if (c <= 0.0031308) s = 12.92 * c;
-            else s = 1.055 * Math.Pow(c, 1.0 / 2.4) - 0.055;
+            double s = c <= 0.0031308 ? 12.92 * c : 1.055 * Math.Pow(c, 1.0 / 2.4) - 0.055;
             int v = (int)Math.Round(s * 255.0);
             if (v < 0) v = 0;
             if (v > 255) v = 255;
@@ -339,15 +327,15 @@ namespace ConsoleGame.Renderer
             return Math.Pow((s + 0.055) / 1.055, 2.4);
         }
 
-        private static double WeightedDist2Linear(double r1, double g1, double b1, double r2, double g2, double b2)
+        private static int Dist2Srgb(int r1, int g1, int b1, int r2, int g2, int b2)
         {
-            double dr = r1 - r2;
-            double dg = g1 - g2;
-            double db = b1 - b2;
-            return 0.2126 * dr * dr + 0.7152 * dg * dg + 0.0722 * db * db;
+            int dr = r1 - r2;
+            int dg = g1 - g2;
+            int db = b1 - b2;
+            return dr * dr + dg * dg + db * db;
         }
 
-        // ===== Legacy helpers (kept for reference; no longer used by mapping) =====
+        // ===== Legacy helpers kept for reference =====
 
         private static int ToCubeLevel(int v)
         {

@@ -32,6 +32,7 @@ namespace ConsoleGame.RayTracing
         private const int DiffuseBounces = 1;
         private const int IndirectSamples = 1;
         private const int MaxMirrorBounces = 2;
+        private const int MaxRefractions = 2;
         private const float MirrorThreshold = 0.9f;
         private const float Eps = 1e-4f;
 
@@ -50,13 +51,28 @@ namespace ConsoleGame.RayTracing
         private float lastYaw = float.NaN;
         private float lastPitch = float.NaN;
 
-        private Ray[,] rays; // hi-res ray buffer generated in its own phase
+        private Ray[,] rays;
 
+        private int procCount;
         private FixedThreadFor threadpool;
+
+        private float toneExposure = 1.0f;
+        private float toneGamma = 2.2f;
+
+        private bool autoExposure = true;
+        private float aeKey = 0.18f;
+        private float aeSpeed = 0.2f;
+        private float aeExposure = 1.0f;
+        private float aeMin = 0.35f;
+        private float aeMax = 3.0f;
+
+        private float shadowContrast = 1.15f; // >1 increases contrast, focused towards shadows
+        private float shadowPivot = 0.22f;    // pivot luminance in SDR linear [0..1] that separates "shadows" from mids
 
         public RaytraceRenderer(Framebuffer framebuffer, Scene scene, float fovDeg, int pxW, int pxH, int superSample)
         {
-            threadpool = new FixedThreadFor(Environment.ProcessorCount, "Render Threads");
+            procCount = Math.Max(1, Environment.ProcessorCount);
+            threadpool = new FixedThreadFor(procCount, "Ray Trace Render Threads");
             this.scene = scene;
             this.fovDeg = fovDeg;
             ss = Math.Max(1, superSample);
@@ -112,6 +128,27 @@ namespace ConsoleGame.RayTracing
             this.fovDeg = fovDeg;
         }
 
+        public void SetToneMapping(float exposure, float gamma)
+        {
+            toneExposure = MathF.Max(0.001f, exposure);
+            toneGamma = MathF.Max(0.1f, gamma);
+        }
+
+        public void SetAutoExposure(bool enabled, float key = 0.18f, float speed = 0.2f, float minExposure = 0.35f, float maxExposure = 3.0f)
+        {
+            autoExposure = enabled;
+            aeKey = MathF.Max(1e-4f, key);
+            aeSpeed = MathF.Max(0.0f, speed);
+            aeMin = MathF.Max(0.001f, minExposure);
+            aeMax = MathF.Max(aeMin, maxExposure);
+        }
+
+        public void SetShadowContrast(float contrast, float pivot)
+        {
+            shadowContrast = MathF.Max(0.1f, contrast);
+            shadowPivot = MathF.Max(0.0f, MathF.Min(1.0f, pivot));
+        }
+
         public void TryFlipAndBlit(Framebuffer fb)
         {
             float aspect = hiW / (float)hiH;
@@ -131,17 +168,14 @@ namespace ConsoleGame.RayTracing
 
             Camera cam = BuildCamera(camPosSnapshot, yawSnapshot, pitchSnapshot, fovDeg, aspect);
 
-            int procCount = Math.Max(1, Environment.ProcessorCount);
             long frame = Interlocked.Increment(ref frameCounter);
 
-            // Per-frame TAA jitter using Halton(2,3), in pixel units [-0.5, 0.5)
             int frameIdx = unchecked((int)(frame & 0x7fffffff));
             float jitterX = Halton(frameIdx + 1, 2) - 0.5f;
             float jitterY = Halton(frameIdx + 1, 3) - 0.5f;
 
             Chexel[,] target = frameBuffer;
 
-            // Phase 0: generate all hi-res rays in parallel (with camera jitter)
             threadpool.For(0, procCount, worker =>
             {
                 int yStart = worker * hiH / procCount;
@@ -155,7 +189,6 @@ namespace ConsoleGame.RayTracing
                 }
             });
 
-            // Phase 1: trace using prebuilt rays and EMA into single history buffer (basic TAA)
             threadpool.For(0, procCount, worker =>
             {
                 int yStart = worker * hiH / procCount;
@@ -168,16 +201,56 @@ namespace ConsoleGame.RayTracing
                         float uCenter = (px + 0.5f) / hiW;
                         float vCenter = (py + 0.5f) / hiH;
                         Vec3 cur = TraceFull(scene, rays[px, py], 0, 0, ref rng, uCenter, vCenter);
-                        cur = ClampLuminance(cur, MaxLuminance).Saturate();
                         Vec3 prev = history[px, py];
                         float ia = 1.0f - blendAlpha;
-                        Vec3 blended = new Vec3(prev.X * ia + cur.X * blendAlpha, prev.Y * ia + cur.Y * blendAlpha, prev.Z * ia + cur.Z * blendAlpha).Saturate();
+                        Vec3 blended = new Vec3(prev.X * ia + cur.X * blendAlpha, prev.Y * ia + cur.Y * blendAlpha, prev.Z * ia + cur.Z * blendAlpha);
                         history[px, py] = blended;
                     }
                 }
             });
 
-            // Phase 2: downsample history into console cells and write high-precision colors
+            float effectiveExposure = toneExposure;
+            if (autoExposure)
+            {
+                int step = Math.Max(2, ss * 2);
+                float[] logSum = new float[procCount];
+                int[] cnt = new int[procCount];
+                threadpool.For(0, procCount, worker =>
+                {
+                    int yStart = worker * hiH / procCount;
+                    int yEnd = (worker + 1) * hiH / procCount;
+                    float sum = 0.0f;
+                    int c = 0;
+                    for (int py = yStart; py < yEnd; py += step)
+                    {
+                        for (int px = 0; px < hiW; px += step)
+                        {
+                            Vec3 h = history[px, py];
+                            float lum = 0.2126f * h.X + 0.7152f * h.Y + 0.0722f * h.Z;
+                            sum += MathF.Log(1e-6f + lum);
+                            c++;
+                        }
+                    }
+                    logSum[worker] = sum;
+                    cnt[worker] = c;
+                });
+                float totalLog = 0.0f;
+                int totalCount = 0;
+                for (int i = 0; i < procCount; i++)
+                {
+                    totalLog += logSum[i];
+                    totalCount += cnt[i];
+                }
+                float avgLog = totalCount > 0 ? totalLog / totalCount : 0.0f;
+                float avgLum = MathF.Exp(avgLog);
+                float targetExp = aeKey / MathF.Max(1e-6f, avgLum);
+                if (targetExp < aeMin) targetExp = aeMin;
+                if (targetExp > aeMax) targetExp = aeMax;
+                float s = 1.0f - MathF.Exp(-aeSpeed);
+                aeExposure = aeExposure + (targetExp - aeExposure) * s;
+                effectiveExposure = toneExposure * aeExposure;
+            }
+
             threadpool.For(0, procCount, worker =>
             {
                 int yStart = worker * fbH / procCount;
@@ -203,16 +276,17 @@ namespace ConsoleGame.RayTracing
                             }
                         }
                         float inv = 1.0f / (ss * ss);
-                        Vec3 topAvg = new Vec3(topSum.X * inv, topSum.Y * inv, topSum.Z * inv).Saturate();
-                        Vec3 botAvg = new Vec3(botSum.X * inv, botSum.Y * inv, botSum.Z * inv).Saturate();
+                        Vec3 topAvg = new Vec3(topSum.X * inv, topSum.Y * inv, topSum.Z * inv);
+                        Vec3 botAvg = new Vec3(botSum.X * inv, botSum.Y * inv, botSum.Z * inv);
 
-                        // Store full-precision colors in Chexel; terminal will quantize as needed.
-                        target[cx, cy] = new Chexel('▀', topAvg, botAvg);
+                        Vec3 topSDR = ToneMapAndEncode(topAvg, effectiveExposure, toneGamma, shadowContrast, shadowPivot);
+                        Vec3 botSDR = ToneMapAndEncode(botAvg, effectiveExposure, toneGamma, shadowContrast, shadowPivot);
+
+                        target[cx, cy] = new Chexel('▀', topSDR, botSDR);
                     }
                 }
             });
 
-            // Phase 3: blit to framebuffer
             threadpool.For(0, procCount, worker =>
             {
                 int yStart = worker * fbH / procCount;
@@ -295,7 +369,8 @@ namespace ConsoleGame.RayTracing
             }
             Vec3 color = rec.Mat.Emission;
 
-            // Transparent / refractive materials (glass etc.): use refraction + Fresnel reflection and return early (no diffuse).
+            Vec3 baseAlbedo = SampleAlbedo(rec.Mat, rec.P, rec.N, rec.U, rec.V);
+
             if (rec.Mat.Transparency > 0.0)
             {
                 if (mirrorDepth >= MaxMirrorBounces) return color;
@@ -316,7 +391,6 @@ namespace ConsoleGame.RayTracing
                 float Tr = (float)Math.Clamp(rec.Mat.Transparency, 0.0, 1.0);
                 float T = hasRefract ? (1.0f - R) * Tr : 0.0f;
 
-                // Optional artist control: allow extra reflectivity to bias reflection beyond Fresnel.
                 R = Math.Clamp(R + (float)rec.Mat.Reflectivity * (1.0f - R), 0.0f, 1.0f);
 
                 Vec3 accum = Vec3.Zero;
@@ -325,15 +399,13 @@ namespace ConsoleGame.RayTracing
                 {
                     Ray reflRay = new Ray(rec.P + nl * Eps, reflDir);
                     Vec3 rc = TraceFull(scene, reflRay, mirrorDepth + 1, diffuseDepth, ref rng, screenU, screenV);
-                    // Mirror tint by Albedo for colored mirrors.
-                    accum += rc * rec.Mat.Albedo * R;
+                    accum += new Vec3(rc.X * baseAlbedo.X, rc.Y * baseAlbedo.Y, rc.Z * baseAlbedo.Z) * R;
                 }
 
                 if (T > 0.0f)
                 {
                     Ray refrRay = new Ray(rec.P - nl * Eps, refrDir.Normalized());
                     Vec3 tc = TraceFull(scene, refrRay, mirrorDepth + 1, diffuseDepth, ref rng, screenU, screenV);
-                    // Simple colored transmission; for Beer-Lambert you'd need path length inside medium.
                     Vec3 transTint = rec.Mat.TransmissionColor;
                     accum += tc * transTint * T;
                 }
@@ -348,14 +420,14 @@ namespace ConsoleGame.RayTracing
                 Vec3 reflDir = Reflect(r.Dir, rec.N).Normalized();
                 Ray reflRay = new Ray(rec.P + rec.N * Eps, reflDir);
                 Vec3 reflCol = TraceFull(scene, reflRay, mirrorDepth + 1, diffuseDepth, ref rng, screenU, screenV);
-                color += new Vec3(reflCol.X * rec.Mat.Albedo.X, reflCol.Y * rec.Mat.Albedo.Y, reflCol.Z * rec.Mat.Albedo.Z);
+                color += new Vec3(reflCol.X * baseAlbedo.X, reflCol.Y * baseAlbedo.Y, reflCol.Z * baseAlbedo.Z);
                 return color;
             }
 
             if (scene.Ambient.Intensity > 0.0f)
             {
                 Vec3 a = new Vec3(scene.Ambient.Color.X * scene.Ambient.Intensity, scene.Ambient.Color.Y * scene.Ambient.Intensity, scene.Ambient.Color.Z * scene.Ambient.Intensity);
-                color += new Vec3(a.X * rec.Mat.Albedo.X, a.Y * rec.Mat.Albedo.Y, a.Z * rec.Mat.Albedo.Z);
+                color += new Vec3(a.X * baseAlbedo.X, a.Y * baseAlbedo.Y, a.Z * baseAlbedo.Z);
             }
 
             for (int i = 0; i < scene.Lights.Count; i++)
@@ -370,12 +442,11 @@ namespace ConsoleGame.RayTracing
 
                 Ray shadow = new Ray(rec.P + rec.N * Eps, ldir);
 
-                // Accumulate colored transmittance to the light through transparent occluders.
                 Vec3 transToLight = ComputeTransmittanceToLight(scene, shadow, dist - Eps, screenU, screenV);
                 if (transToLight.X <= 1e-6 && transToLight.Y <= 1e-6 && transToLight.Z <= 1e-6) continue;
 
                 float atten = light.Intensity / dist2;
-                Vec3 lambert = rec.Mat.Albedo * (nDotL * atten) * light.Color;
+                Vec3 lambert = baseAlbedo * (nDotL * atten) * light.Color;
                 color += lambert * transToLight;
             }
 
@@ -387,7 +458,7 @@ namespace ConsoleGame.RayTracing
                     Vec3 bounceDir = CosineSampleHemisphere(rec.N, ref rng);
                     Ray bounce = new Ray(rec.P + rec.N * Eps, bounceDir);
                     Vec3 Li = TraceFull(scene, bounce, mirrorDepth, diffuseDepth + 1, ref rng, screenU, screenV);
-                    indirect += new Vec3(Li.X * rec.Mat.Albedo.X, Li.Y * rec.Mat.Albedo.Y, Li.Z * rec.Mat.Albedo.Z);
+                    indirect += new Vec3(Li.X * baseAlbedo.X, Li.Y * baseAlbedo.Y, Li.Z * baseAlbedo.Z);
                 }
                 float invSpp = 1.0f / IndirectSamples;
                 color += new Vec3(indirect.X * invSpp, indirect.Y * invSpp, indirect.Z * invSpp);
@@ -396,9 +467,21 @@ namespace ConsoleGame.RayTracing
             return color;
         }
 
+        private static Vec3 SampleAlbedo(Material mat, Vec3 pos, Vec3 normal, float u, float v)
+        {
+            if (mat.DiffuseTexture == null || mat.TextureWeight <= 0.0)
+            {
+                return mat.Albedo;
+            }
+            float tiles = (float)Math.Max(1e-6, mat.UVScale);
+            Vec3 tex = mat.DiffuseTexture.SampleBilinear(u * tiles, v * tiles);
+            float t = (float)Math.Clamp(mat.TextureWeight, 0.0, 1.0);
+            Vec3 outAlbedo = mat.Albedo * (1.0f - t) + tex * t;
+            return outAlbedo.Saturate();
+        }
+
         private static bool Refract(Vec3 v, Vec3 n, float eta, out Vec3 refrDir)
         {
-            // v: incident (unit), n: outward normal (unit), eta = eta_i / eta_t
             float cosi = -MathF.Max(-1.0f, MathF.Min(1.0f, (float)v.Dot(n)));
             float k = 1.0f - eta * eta * (1.0f - cosi * cosi);
             if (k < 0.0f)
@@ -423,8 +506,10 @@ namespace ConsoleGame.RayTracing
             float tTraveled = 0.0f;
             HitRecord block = default;
             float tmin = 0.0f + Eps;
-            while (scene.Hit(shadow, tmin, maxDist, ref block, screenU, screenV))
+            int counter = 0;
+            while (counter < MaxRefractions && scene.Hit(shadow, tmin, maxDist, ref block, screenU, screenV))
             {
+                counter++;
                 Vec3 hitVec = block.P - shadow.Origin;
                 float tHit = MathF.Sqrt((float)hitVec.Dot(hitVec));
                 if (tHit > maxDist) break;
@@ -443,7 +528,6 @@ namespace ConsoleGame.RayTracing
                 tTraveled = tHit + Eps;
                 tmin = tTraveled;
                 shadow = new Ray(shadow.Origin, shadow.Dir);
-                // Continue marching through further transparent occluders.
             }
             return trans;
         }
@@ -506,6 +590,71 @@ namespace ConsoleGame.RayTracing
             if (y <= maxY) return c;
             float s = maxY / MathF.Max(y, 1e-6f);
             return new Vec3(c.X * s, c.Y * s, c.Z * s);
+        }
+
+        private static Vec3 ToneMapAndEncode(Vec3 hdr, float exposure, float gamma, float shadowContrast, float shadowPivot)
+        {
+            float r = MathF.Max(0.0f, hdr.X);
+            float g = MathF.Max(0.0f, hdr.Y);
+            float b = MathF.Max(0.0f, hdr.Z);
+
+            r *= exposure;
+            g *= exposure;
+            b *= exposure;
+
+            r = ACESFilm(r);
+            g = ACESFilm(g);
+            b = ACESFilm(b);
+
+            Vec3 sdr = new Vec3(r, g, b);
+            sdr = ApplyShadowContrast(sdr, shadowContrast, shadowPivot);
+
+            float invGamma = 1.0f / MathF.Max(0.1f, gamma);
+            sdr = new Vec3(MathF.Pow(Saturate01(sdr.X), invGamma), MathF.Pow(Saturate01(sdr.Y), invGamma), MathF.Pow(Saturate01(sdr.Z), invGamma));
+
+            return new Vec3(Saturate01(sdr.X), Saturate01(sdr.Y), Saturate01(sdr.Z));
+        }
+
+        private static Vec3 ApplyShadowContrast(Vec3 sdrLinear, float contrast, float pivot)
+        {
+            float L = 0.2126f * sdrLinear.X + 0.7152f * sdrLinear.Y + 0.0722f * sdrLinear.Z;
+            float w = 1.0f - Smoothstep(0.0f, MathF.Max(1e-6f, pivot), L);
+            float cEff = 1.0f + (contrast - 1.0f) * w;
+            float Lc = (L - pivot) * cEff + pivot;
+            if (L <= 1e-6f) return new Vec3(0.0f, 0.0f, 0.0f);
+            float scale = Saturate01(Lc) / L;
+            return new Vec3(Saturate01(sdrLinear.X * scale), Saturate01(sdrLinear.Y * scale), Saturate01(sdrLinear.Z * scale));
+        }
+
+        private static float Smoothstep(float a, float b, float x)
+        {
+            if (b <= a) return x <= a ? 0.0f : 1.0f;
+            float t = (x - a) / (b - a);
+            if (t < 0.0f) t = 0.0f;
+            if (t > 1.0f) t = 1.0f;
+            return t * t * (3.0f - 2.0f * t);
+        }
+
+        private static float Saturate01(float v)
+        {
+            if (v < 0.0f) return 0.0f;
+            if (v > 1.0f) return 1.0f;
+            return v;
+        }
+
+        private static float ACESFilm(float x)
+        {
+            float a = 2.51f;
+            float b = 0.03f;
+            float c = 2.43f;
+            float d = 0.59f;
+            float e = 0.14f;
+            float num = x * (a * x + b);
+            float den = x * (c * x + d) + e;
+            float y = den > 0.0f ? num / den : 0.0f;
+            if (y < 0.0f) y = 0.0f;
+            if (y > 1.0f) y = 1.0f;
+            return y;
         }
     }
 }

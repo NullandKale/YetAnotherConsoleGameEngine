@@ -21,6 +21,7 @@ namespace ConsoleGame.Renderer
         {
             //renderer = new TerminalRenderer(OnResized);
             renderer = new ANSITerminalRenderer(OnResized);
+            //renderer = new OpenGLTerminalRenderer(OnResized);
             //renderer = new Win32TerminalRenderer(OnResized);
             input = new TerminalInput();
             isRunning = false;

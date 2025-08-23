@@ -324,6 +324,28 @@ namespace ConsoleGame.RayTracing.Scenes
             return s;
         }
 
+        public static Scene BuildTextureTestScene()
+        {
+            Scene s = new Scene();
+            s.Ambient = new AmbientLight(new Vec3(1, 1, 1), 0.5f);
+
+            ConsoleGame.Renderer.Texture tex = new ConsoleGame.Renderer.Texture(@"C:\Users\alec\Downloads\IMG_1355.bmp");
+
+            Material texMat = new Material(new Vec3(1, 1, 1), 0.0, 0.0, Vec3.Zero);
+            texMat.DiffuseTexture = tex;
+            texMat.TextureWeight = 1.0;
+            texMat.UVScale = 1.0;
+
+            s.Objects.Add(new Box(new Vec3(-0.5, -0.5, -2.5), new Vec3(0.5, 0.5, -1.5), (pos, n, u) => texMat, 0.00f, 0.00f));
+
+            s.BackgroundTop = new Vec3(0.0, 0.0, 0.0);
+            s.BackgroundBottom = new Vec3(0.0, 0.0, 0.0);
+
+            s.RebuildBVH();
+            return s;
+        }
+
+
         public static Scene BuildCylindersDisksAndTriangles()
         {
             Scene s = new Scene();

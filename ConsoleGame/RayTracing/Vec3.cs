@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Runtime.CompilerServices;
 
 namespace ConsoleGame.RayTracing
 {
@@ -8,6 +9,7 @@ namespace ConsoleGame.RayTracing
         public float Y;
         public float Z;
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public Vec3(float x, float y, float z)
         {
             X = x;
@@ -15,6 +17,7 @@ namespace ConsoleGame.RayTracing
             Z = z;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public Vec3(double x, double y, double z)
         {
             X = (float)x;
@@ -24,71 +27,92 @@ namespace ConsoleGame.RayTracing
 
         public static Vec3 Zero => new Vec3(0.0f, 0.0f, 0.0f);
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vec3 operator +(Vec3 a, Vec3 b)
         {
             return new Vec3(a.X + b.X, a.Y + b.Y, a.Z + b.Z);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vec3 operator -(Vec3 a, Vec3 b)
         {
             return new Vec3(a.X - b.X, a.Y - b.Y, a.Z - b.Z);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vec3 operator -(Vec3 a)
         {
             return new Vec3(-a.X, -a.Y, -a.Z);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vec3 operator *(Vec3 a, Vec3 b)
         {
             return new Vec3(a.X * b.X, a.Y * b.Y, a.Z * b.Z);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vec3 operator *(Vec3 a, float s)
         {
             return new Vec3(a.X * s, a.Y * s, a.Z * s);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vec3 operator *(float s, Vec3 a)
         {
             return new Vec3(a.X * s, a.Y * s, a.Z * s);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vec3 operator /(Vec3 a, float s)
         {
-            return new Vec3(a.X / s, a.Y / s, a.Z / s);
+            float inv = 1.0f / s;
+            return new Vec3(a.X * inv, a.Y * inv, a.Z * inv);
         }
 
-        public float Dot(Vec3 b)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public readonly float Dot(Vec3 b)
         {
             return X * b.X + Y * b.Y + Z * b.Z;
         }
 
-        public Vec3 Cross(Vec3 b)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public readonly Vec3 Cross(Vec3 b)
         {
             return new Vec3(Y * b.Z - Z * b.Y, Z * b.X - X * b.Z, X * b.Y - Y * b.X);
         }
 
-        public float Length()
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public readonly float LengthSquared()
         {
-            return MathF.Sqrt(Dot(this));
+            return X * X + Y * Y + Z * Z;
         }
 
-        public Vec3 Normalized()
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public readonly float Length()
         {
-            float len = Length();
-            if (len <= 0.0)
+            return MathF.Sqrt(X * X + Y * Y + Z * Z);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public readonly Vec3 Normalized()
+        {
+            float lenSq = X * X + Y * Y + Z * Z;
+            if (lenSq <= 0.0f)
             {
                 return this;
             }
-            return this / len;
+            float invLen = 1.0f / MathF.Sqrt(lenSq);
+            return new Vec3(X * invLen, Y * invLen, Z * invLen);
         }
 
-        public Vec3 Saturate()
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public readonly Vec3 Saturate()
         {
             return new Vec3(Clamp01(X), Clamp01(Y), Clamp01(Z));
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float Clamp01(float v)
         {
             if (v < 0.0f)
