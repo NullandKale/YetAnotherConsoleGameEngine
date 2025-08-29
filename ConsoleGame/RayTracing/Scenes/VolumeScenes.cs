@@ -2,7 +2,8 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
-using ConsoleGame.RayTracing;  // for Ray, HitRecord
+using ConsoleGame.RayTracing;
+using ConsoleGame.RayTracing.Scenes.WorldGeneration;  // for Ray, HitRecord
 
 namespace ConsoleGame.RayTracing.Scenes
 {

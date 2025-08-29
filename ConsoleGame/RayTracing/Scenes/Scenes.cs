@@ -1,4 +1,7 @@
 ﻿using ConsoleGame.RayTracing.Objects;
+using ConsoleGame.RayTracing.Objects.BoundedSolids;
+using ConsoleGame.RayTracing.Objects.Surfaces;
+
 using ConsoleRayTracing;
 
 namespace ConsoleGame.RayTracing.Scenes
@@ -331,7 +334,7 @@ namespace ConsoleGame.RayTracing.Scenes
 
             ConsoleGame.Renderer.Texture tex = new ConsoleGame.Renderer.Texture(@"C:\Users\alec\Downloads\IMG_1355.bmp");
 
-            Material texMat = new Material(new Vec3(1, 1, 1), 0.0, 0.0, Vec3.Zero);
+            Material texMat = new Material(new Vec3(0.5, 0.5, 0.5), 0.0, 0.0, Vec3.Zero);
             texMat.DiffuseTexture = tex;
             texMat.TextureWeight = 1.0;
             texMat.UVScale = 1.0;

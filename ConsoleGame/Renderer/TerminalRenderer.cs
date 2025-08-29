@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace ConsoleGame.Renderer
 {
-    public class TerminalRenderer
+    public class TerminalRenderer : ITerminalRenderer
     {
         private List<Framebuffer> frameBuffers;
         public int consoleWidth;
@@ -13,9 +13,13 @@ namespace ConsoleGame.Renderer
         private ConsoleColor defaultFg;
         private ConsoleColor defaultBg;
         private char[] lineBuffer; // Pre-allocated buffer for rendering lines
+        private readonly Action<int, int> onResize;
 
-        public TerminalRenderer()
+        int ITerminalRenderer.consoleWidth => this.consoleWidth;
+
+        public TerminalRenderer(Action<int, int> onResize)
         {
+            this.onResize = onResize;   
             frameBuffers = new List<Framebuffer>();
             consoleWidth = Console.WindowWidth;
             consoleHeight = Console.WindowHeight - 1;
@@ -64,6 +68,15 @@ namespace ConsoleGame.Renderer
 
         public void Render()
         {
+            bool sizeChanged = false;
+            if (Console.WindowWidth != consoleWidth || Console.WindowHeight - 1 != consoleHeight)
+            {
+                consoleWidth = Console.WindowWidth;
+                consoleHeight = Console.WindowHeight - 1;
+                onResize?.Invoke(consoleWidth, consoleHeight);
+                sizeChanged = true;
+            }
+
             Console.SetCursorPosition(0, 0);
 
             for (int y = 0; y < consoleHeight; y++)

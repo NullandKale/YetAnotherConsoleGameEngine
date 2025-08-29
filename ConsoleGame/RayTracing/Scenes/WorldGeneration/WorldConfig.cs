@@ -1,4 +1,4 @@
-﻿namespace ConsoleGame.RayTracing.Scenes
+﻿namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
 {
     public sealed class WorldConfig
     {

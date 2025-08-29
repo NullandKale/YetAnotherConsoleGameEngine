@@ -55,6 +55,7 @@ namespace ConsoleGame.RayTracing
 
         private int procCount;
         private FixedThreadFor threadpool;
+        private PixelThreadPool pixelPool;
 
         private float toneExposure = 1.0f;
         private float toneGamma = 2.2f;
@@ -69,10 +70,13 @@ namespace ConsoleGame.RayTracing
         private float shadowContrast = 1.15f; // >1 increases contrast, focused towards shadows
         private float shadowPivot = 0.22f;    // pivot luminance in SDR linear [0..1] that separates "shadows" from mids
 
+        private bool[,] skyMask;
+
         public RaytraceRenderer(Framebuffer framebuffer, Scene scene, float fovDeg, int pxW, int pxH, int superSample)
         {
             procCount = Math.Max(1, Environment.ProcessorCount);
             threadpool = new FixedThreadFor(procCount, "Ray Trace Render Threads");
+            pixelPool = new PixelThreadPool(procCount, "Ray Trace Pixels");
             this.scene = scene;
             this.fovDeg = fovDeg;
             ss = Math.Max(1, superSample);
@@ -86,6 +90,7 @@ namespace ConsoleGame.RayTracing
             frameBuffer = new Chexel[fbW, fbH];
             history = new Vec3[hiW, hiH];
             rays = new Ray[hiW, hiH];
+            skyMask = new bool[hiW, hiH];
 
             scene.RebuildBVH();
         }
@@ -104,6 +109,7 @@ namespace ConsoleGame.RayTracing
             frameBuffer = new Chexel[fbW, fbH];
             history = new Vec3[hiW, hiH];
             rays = new Ray[hiW, hiH];
+            skyMask = new bool[hiW, hiH];
 
             historyValid = false;
             lastCamX = float.NaN;
@@ -189,24 +195,31 @@ namespace ConsoleGame.RayTracing
                 }
             });
 
-            threadpool.For(0, procCount, worker =>
+            pixelPool.For2D(hiW, hiH, (px, py, threadId) =>
             {
-                int yStart = worker * hiH / procCount;
-                int yEnd = (worker + 1) * hiH / procCount;
-                for (int py = yStart; py < yEnd; py++)
+                Rng rng = new Rng(PerFrameSeed(px, py, frame, 0, 0));
+                float uCenter = (px + 0.5f) / hiW;
+                float vCenter = (py + 0.5f) / hiH;
+
+                HitRecord temp = default;
+                bool isSky = !scene.Hit(rays[px, py], 0.001f, float.MaxValue, ref temp, uCenter, vCenter);
+                skyMask[px, py] = isSky;
+
+                Vec3 cur;
+                if (isSky)
                 {
-                    for (int px = 0; px < hiW; px++)
-                    {
-                        Rng rng = new Rng(PerFrameSeed(px, py, frame, 0, 0));
-                        float uCenter = (px + 0.5f) / hiW;
-                        float vCenter = (py + 0.5f) / hiH;
-                        Vec3 cur = TraceFull(scene, rays[px, py], 0, 0, ref rng, uCenter, vCenter);
-                        Vec3 prev = history[px, py];
-                        float ia = 1.0f - blendAlpha;
-                        Vec3 blended = new Vec3(prev.X * ia + cur.X * blendAlpha, prev.Y * ia + cur.Y * blendAlpha, prev.Z * ia + cur.Z * blendAlpha);
-                        history[px, py] = blended;
-                    }
+                    float tbg = 0.5f * (rays[px, py].Dir.Y + 1.0f);
+                    cur = Lerp(scene.BackgroundBottom, scene.BackgroundTop, tbg);
                 }
+                else
+                {
+                    cur = TraceFull(scene, rays[px, py], 0, 0, ref rng, uCenter, vCenter);
+                }
+
+                Vec3 prev = history[px, py];
+                float ia = 1.0f - blendAlpha;
+                Vec3 blended = new Vec3(prev.X * ia + cur.X * blendAlpha, prev.Y * ia + cur.Y * blendAlpha, prev.Z * ia + cur.Z * blendAlpha);
+                history[px, py] = blended;
             });
 
             float effectiveExposure = toneExposure;
@@ -225,6 +238,7 @@ namespace ConsoleGame.RayTracing
                     {
                         for (int px = 0; px < hiW; px += step)
                         {
+                            if (skyMask[px, py]) continue;
                             Vec3 h = history[px, py];
                             float lum = 0.2126f * h.X + 0.7152f * h.Y + 0.0722f * h.Z;
                             sum += MathF.Log(1e-6f + lum);
@@ -243,7 +257,7 @@ namespace ConsoleGame.RayTracing
                 }
                 float avgLog = totalCount > 0 ? totalLog / totalCount : 0.0f;
                 float avgLum = MathF.Exp(avgLog);
-                float targetExp = aeKey / MathF.Max(1e-6f, avgLum);
+                float targetExp = totalCount > 0 ? aeKey / MathF.Max(1e-6f, avgLum) : aeExposure;
                 if (targetExp < aeMin) targetExp = aeMin;
                 if (targetExp > aeMax) targetExp = aeMax;
                 float s = 1.0f - MathF.Exp(-aeSpeed);

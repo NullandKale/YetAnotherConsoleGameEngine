@@ -1,4 +1,5 @@
 ﻿using ConsoleGame.Entities;
+using ConsoleGame.Renderer;
 
 namespace ConsoleGame.Components
 {
@@ -7,6 +8,11 @@ namespace ConsoleGame.Components
         public BaseEntity Parent;
 
         public virtual void Update(double deltaTime)
+        {
+            // Base does nothing
+        }
+
+        public virtual void HandleMouse(TerminalInput.MouseEvent me, float dt)
         {
             // Base does nothing
         }

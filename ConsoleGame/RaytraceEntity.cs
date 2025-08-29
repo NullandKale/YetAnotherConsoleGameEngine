@@ -151,12 +151,17 @@ public partial class RaytraceEntity : BaseComponent
         this.renderer.SetCamera(this.activeScene.CameraPos, this.activeScene.Yaw, this.activeScene.Pitch);
     }
 
+    public override void HandleMouse(TerminalInput.MouseEvent me, float dt)
+    {
+        activeScene.HandleMouse(me, dt);
+    }
+
     public override void HandleInput(ConsoleKeyInfo keyInfo)
     {
         float dt = lastDeltaTime;
         if (dt < 0.0f) dt = 0.0f;
 
-        this.activeScene.HandleInput(keyInfo, dt);
+        activeScene.HandleInput(keyInfo, dt);
 
         // Number-row and numpad -> switch to camera mode with index mapping: '1'->0, ... '9'->8, '0'->9
         int camIdx = MapKeyToCameraIndex(keyInfo.Key);

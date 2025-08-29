@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using ConsoleGame.RayTracing;
+using ConsoleGame.Threads;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
@@ -9,7 +10,7 @@ using OpenTK.Windowing.Desktop;
 
 namespace ConsoleGame.Renderer
 {
-    public sealed class OpenGLTerminalRenderer : IDisposable
+    public sealed class OpenGLTerminalRenderer : IDisposable, ITerminalRenderer
     {
         private readonly List<Framebuffer> frameBuffers;
         public int consoleWidth;
@@ -34,9 +35,18 @@ namespace ConsoleGame.Renderer
         private int scale;
         private readonly int minScale = 1;
         private readonly int maxScale = 64;
-        private bool resizingInternally = false;
 
-        public OpenGLTerminalRenderer(Action<int, int> onResize, int initialCellsW = 120, int initialCellsH = 40, int initialScale = 8, string title = "OpenGL Terminal Renderer")
+        private const int MinCellsW = 40;
+        private const int MinCellsH = 15;
+        private const int MaxCellsW = 400;
+        private const int MaxCellsH = 200;
+
+        private readonly FixedThreadFor threadpool;
+        private readonly bool ownsThreadpool;
+
+        int ITerminalRenderer.consoleWidth => this.consoleWidth;
+
+        public OpenGLTerminalRenderer(Action<int, int> onResize, int initialCellsW = 120, int initialCellsH = 40, int initialScale = 8, string title = "OpenGL Terminal Renderer", FixedThreadFor pool = null)
         {
             this.onResize = onResize;
             this.windowTitle = string.IsNullOrWhiteSpace(title) ? "OpenGL Terminal Renderer" : title;
@@ -44,8 +54,21 @@ namespace ConsoleGame.Renderer
             consoleWidth = Math.Max(1, initialCellsW);
             consoleHeight = Math.Max(1, initialCellsH);
             scale = Math.Clamp(initialScale, minScale, maxScale);
+
+            if (pool != null)
+            {
+                threadpool = pool;
+                ownsThreadpool = false;
+            }
+            else
+            {
+                threadpool = new FixedThreadFor(Environment.ProcessorCount, "GL-Compose");
+                ownsThreadpool = true;
+            }
+
             CreateWindowOnThisThread(consoleWidth, consoleHeight, scale, this.windowTitle);
             InitGLResources();
+            UpdateViewport();
             initialized = true;
         }
 
@@ -63,16 +86,16 @@ namespace ConsoleGame.Renderer
 
         public void SetGridSize(int cellsW, int cellsH)
         {
-            int w = Math.Max(1, cellsW);
-            int h = Math.Max(1, cellsH);
+            int w = Math.Clamp(cellsW, MinCellsW, MaxCellsW);
+            int h = Math.Clamp(cellsH, MinCellsH, MaxCellsH);
             if (w == consoleWidth && h == consoleHeight)
             {
                 return;
             }
             consoleWidth = w;
             consoleHeight = h;
-            UpdateWindowSizeToAspect();
             onResize?.Invoke(consoleWidth, consoleHeight);
+            UpdateViewport();
         }
 
         public void Render()
@@ -87,7 +110,7 @@ namespace ConsoleGame.Renderer
 
             window.MakeCurrent();
             window.IsEventDriven = false;
-            window.ProcessEvents(0.001);
+            window.ProcessEvents(0.001f);
 
             int pxW = consoleWidth;
             int pxH = consoleHeight * 2;
@@ -97,24 +120,31 @@ namespace ConsoleGame.Renderer
                 composeBuffer = new byte[totalBytes];
             }
 
-            for (int y = 0; y < pxH; y++)
+            int procCount = Math.Max(1, threadpool.ThreadCount);
+            threadpool.For(0, procCount, worker =>
             {
-                int cellY = y >> 1;
-                bool top = (y & 1) == 0;
-                for (int x = 0; x < pxW; x++)
+                int yStart = worker * pxH / procCount;
+                int yEnd = (worker + 1) * pxH / procCount;
+                for (int py = yStart; py < yEnd; py++)
                 {
-                    Chexel c = GetChexelForPoint(x, cellY);
-                    ChexelColor cc = top ? c.ForegroundColor : c.BackgroundColor;
-                    byte r = LinearToSrgb8(cc.color_f32.X);
-                    byte g = LinearToSrgb8(cc.color_f32.Y);
-                    byte b = LinearToSrgb8(cc.color_f32.Z);
-                    int idx = (y * pxW + x) * 4;
-                    composeBuffer[idx + 0] = r;
-                    composeBuffer[idx + 1] = g;
-                    composeBuffer[idx + 2] = b;
-                    composeBuffer[idx + 3] = 255;
+                    int cellY = py >> 1;
+                    bool top = (py & 1) == 0;
+                    int rowBase = py * pxW * 4;
+                    for (int x = 0; x < pxW; x++)
+                    {
+                        Chexel c = GetChexelForPoint(x, cellY);
+                        ChexelColor cc = top ? c.ForegroundColor : c.BackgroundColor;
+                        byte r = LinearToSrgb8(cc.color_f32.X);
+                        byte g = LinearToSrgb8(cc.color_f32.Y);
+                        byte b = LinearToSrgb8(cc.color_f32.Z);
+                        int idx = rowBase + (x << 2);
+                        composeBuffer[idx + 0] = r;
+                        composeBuffer[idx + 1] = g;
+                        composeBuffer[idx + 2] = b;
+                        composeBuffer[idx + 3] = 255;
+                    }
                 }
-            }
+            });
 
             UploadTexture(pxW, pxH, composeBuffer);
 
@@ -125,25 +155,53 @@ namespace ConsoleGame.Renderer
             GL.BindTexture(TextureTarget.Texture2D, texId);
             GL.DrawArrays(PrimitiveType.TriangleFan, 0, 4);
             window.SwapBuffers();
-
-            SnapViewportIfWindowWasResized();
         }
 
         public void Dispose()
         {
             if (disposed) return;
             disposed = true;
-            if (window != null)
+            try
             {
-                if (!window.IsExiting) window.Close();
-                window.MakeCurrent();
-                if (program != 0) { GL.DeleteProgram(program); program = 0; }
-                if (vbo != 0) { GL.DeleteBuffer(vbo); vbo = 0; }
-                if (vao != 0) { GL.DeleteVertexArray(vao); vao = 0; }
-                if (texId != 0) { GL.DeleteTexture(texId); texId = 0; }
-                window.Context?.MakeNoneCurrent();
-                window.Dispose();
-                window = null;
+                if (window != null)
+                {
+                    try { window.WindowState = WindowState.Minimized; } catch { }
+                    try { window.Close(); } catch { }
+                    try { window.IsEventDriven = false; } catch { }
+                    try { window.ProcessEvents(0.01f); } catch { }
+                    try { window.MakeCurrent(); } catch { }
+
+                    try { GL.BindVertexArray(0); } catch { }
+                    try { GL.UseProgram(0); } catch { }
+                    try { GL.BindTexture(TextureTarget.Texture2D, 0); } catch { }
+                    try { GL.BindBuffer(BufferTarget.ArrayBuffer, 0); } catch { }
+
+                    if (program != 0) { try { GL.DeleteProgram(program); } catch { } program = 0; }
+                    if (vbo != 0) { try { GL.DeleteBuffer(vbo); } catch { } vbo = 0; }
+                    if (vao != 0) { try { GL.DeleteVertexArray(vao); } catch { } vao = 0; }
+                    if (texId != 0) { try { GL.DeleteTexture(texId); } catch { } texId = 0; }
+
+                    try { GL.Finish(); } catch { }
+                    try { window.Context?.MakeNoneCurrent(); } catch { }
+                    try
+                    {
+                        // Drain pending close events so the native window actually disappears before we return.
+                        for (int i = 0; i < 5; i++)
+                        {
+                            window.ProcessEvents(0.02f);
+                        }
+                    }
+                    catch { }
+                    try { window.Dispose(); } catch { }
+                    window = null;
+                }
+            }
+            finally
+            {
+                if (ownsThreadpool)
+                {
+                    try { threadpool?.Dispose(); } catch { }
+                }
             }
         }
 
@@ -181,36 +239,20 @@ namespace ConsoleGame.Renderer
         {
             int step = e.OffsetY > 0 ? 1 : (e.OffsetY < 0 ? -1 : 0);
             if (step == 0) return;
-            int newScale = Math.Clamp(scale + step, minScale, maxScale);
-            if (newScale == scale) return;
-            scale = newScale;
-            UpdateWindowSizeToAspect();
+
+            int newW = consoleWidth + step * 4;
+            int newH = consoleHeight + step * 2;
+            newW = Math.Clamp(newW, MinCellsW, MaxCellsW);
+            newH = Math.Clamp(newH, MinCellsH, MaxCellsH);
+            if (newW != consoleWidth || newH != consoleHeight)
+            {
+                SetGridSize(newW, newH);
+            }
         }
 
         private void OnResizeEvent(ResizeEventArgs e)
         {
-            if (resizingInternally)
-            {
-                GL.Viewport(0, 0, e.Width, e.Height);
-                return;
-            }
-
-            int targetW = consoleWidth * scale;
-            int targetH = consoleHeight * 2 * scale;
-
-            int sx = Math.Max(1, e.Width / Math.Max(1, consoleWidth));
-            int sy = Math.Max(1, e.Height / Math.Max(1, consoleHeight * 2));
-            int snapped = Math.Clamp(Math.Min(sx, sy), minScale, maxScale);
-
-            if (snapped != scale || e.Width != targetW || e.Height != targetH)
-            {
-                scale = snapped;
-                UpdateWindowSizeToAspect();
-            }
-            else
-            {
-                GL.Viewport(0, 0, e.Width, e.Height);
-            }
+            UpdateViewport();
         }
 
         private void OnClosingEvent(System.ComponentModel.CancelEventArgs e)
@@ -287,6 +329,7 @@ namespace ConsoleGame.Renderer
                 GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8, w, h, 0, PixelFormat.Rgba, PixelType.UnsignedByte, rgba);
                 uploadedWidth = w;
                 uploadedHeight = h;
+                UpdateViewport();
             }
             else
             {
@@ -310,26 +353,38 @@ namespace ConsoleGame.Renderer
             return new Chexel(' ', ConsoleColor.White, ConsoleColor.Black);
         }
 
-        private void UpdateWindowSizeToAspect()
+        private void UpdateViewport()
         {
             if (window == null || window.IsExiting) return;
-            int targetW = consoleWidth * scale;
-            int targetH = consoleHeight * 2 * scale;
-            resizingInternally = true;
-            window.Size = new Vector2i(targetW, targetH);
-            GL.Viewport(0, 0, targetW, targetH);
-            resizingInternally = false;
-        }
+            int winW = Math.Max(1, window.ClientSize.X);
+            int winH = Math.Max(1, window.ClientSize.Y);
+            int srcW = Math.Max(1, consoleWidth);
+            int srcH = Math.Max(1, consoleHeight * 2);
 
-        private void SnapViewportIfWindowWasResized()
-        {
-            if (window == null || window.IsExiting) return;
-            int targetW = consoleWidth * scale;
-            int targetH = consoleHeight * 2 * scale;
-            if (window.Size.X != targetW || window.Size.Y != targetH)
+            double srcAspect = (double)srcW / (double)srcH;
+            double winAspect = (double)winW / (double)winH;
+
+            int vpW;
+            int vpH;
+            int vpX;
+            int vpY;
+
+            if (winAspect > srcAspect)
             {
-                UpdateWindowSizeToAspect();
+                vpH = winH;
+                vpW = (int)Math.Round(vpH * srcAspect);
+                vpX = (winW - vpW) / 2;
+                vpY = 0;
             }
+            else
+            {
+                vpW = winW;
+                vpH = (int)Math.Round(vpW / srcAspect);
+                vpX = 0;
+                vpY = (winH - vpH) / 2;
+            }
+
+            GL.Viewport(vpX, vpY, Math.Max(1, vpW), Math.Max(1, vpH));
         }
 
         private static byte LinearToSrgb8(double c)

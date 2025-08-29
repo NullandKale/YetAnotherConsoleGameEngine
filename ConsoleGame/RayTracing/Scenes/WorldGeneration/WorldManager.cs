@@ -5,7 +5,7 @@ using System.IO;
 using System.Threading;
 using ConsoleGame.RayTracing.Objects;
 
-namespace ConsoleGame.RayTracing.Scenes
+namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
 {
     /// <summary>
     /// Compact integer 3D key for chunk coordinates with robust hashing.
@@ -100,7 +100,7 @@ namespace ConsoleGame.RayTracing.Scenes
             this.materialLookup = materialLookup ?? throw new ArgumentNullException(nameof(materialLookup));
 
             // Heuristic cache size: enough to remember a few rings beyond view.
-            int viewXZ = Math.Max(1, (2 * config.ViewDistanceChunks + 1));
+            int viewXZ = Math.Max(1, 2 * config.ViewDistanceChunks + 1);
             maxCachedChunks = Math.Max(viewXZ * viewXZ * Math.Max(1, config.ChunksY) * 2, 256);
 
             int wc = Math.Max(1, Environment.ProcessorCount);

@@ -4,24 +4,26 @@ using System.Runtime.InteropServices;
 
 namespace ConsoleGame.Renderer
 {
-    public class Win32TerminalRenderer
+    public class Win32TerminalRenderer : ITerminalRenderer
     {
+        private readonly Action<int, int> onResize;
         private List<Framebuffer> frameBuffers;
         public int consoleWidth;
         public int consoleHeight;
         private CHAR_INFO[] backBuffer;
         private IntPtr hConsole;
 
-        public Win32TerminalRenderer()
+        public Win32TerminalRenderer(Action<int, int> onResize)
         {
+            this.onResize = onResize;
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
                 throw new PlatformNotSupportedException("Win32TerminalRenderer requires Windows.");
             }
 
             frameBuffers = new List<Framebuffer>();
-            consoleWidth = Console.WindowWidth - 1;
-            consoleHeight = Console.WindowHeight - 2;
+            consoleWidth = Math.Max(1, Console.WindowWidth);
+            consoleHeight = Math.Max(1, Console.WindowHeight - 1);
             backBuffer = new CHAR_INFO[consoleWidth * consoleHeight];
 
             hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -65,6 +67,18 @@ namespace ConsoleGame.Renderer
 
         public void Render()
         {
+            bool sizeChanged = false;
+            int newWidth = Math.Max(1, Console.WindowWidth);
+            int newHeight = Math.Max(1, Console.WindowHeight - 1);
+            if (newWidth != consoleWidth || newHeight != consoleHeight)
+            {
+                consoleWidth = newWidth;
+                consoleHeight = newHeight;
+                backBuffer = new CHAR_INFO[consoleWidth * consoleHeight];
+                onResize?.Invoke(consoleWidth, consoleHeight);
+                sizeChanged = true;
+            }
+
             for (int y = 0; y < consoleHeight; y++)
             {
                 for (int x = 0; x < consoleWidth; x++)
@@ -99,6 +113,8 @@ namespace ConsoleGame.Renderer
 
         private const int STD_OUTPUT_HANDLE = -11;
         private static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
+
+        int ITerminalRenderer.consoleWidth => this.consoleWidth;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct COORD

@@ -2,8 +2,11 @@
 using System;
 using System.IO;
 using System.Globalization;
+using System.Collections.Generic;
 using ConsoleRayTracing;
 using ConsoleGame.RayTracing.Objects;
+using ConsoleGame.RayTracing.Objects.BoundedSolids;
+using ConsoleGame.RayTracing.Objects.Surfaces;
 
 namespace ConsoleGame.RayTracing.Scenes
 {
@@ -106,7 +109,7 @@ namespace ConsoleGame.RayTracing.Scenes
         {
             Scene s = NewBaseScene();
             Material cowMat = MeshSwatches.Matte(MeshSwatches.Gold, 0.08, 0.00);
-            AddMeshAutoGround(s, @"assets\cow.obj", cowMat, scale: 0.85f, targetPos: new Vec3(0.0f, 0.0f, -3.2f));
+            AddMeshAutoGround(s, @"assets\cow.obj", cowMat, scale: 1f, targetPos: new Vec3(0, 0.5f, 1f));
             s.RebuildBVH();
             return s;
         }
@@ -115,7 +118,7 @@ namespace ConsoleGame.RayTracing.Scenes
         {
             Scene s = NewBaseScene();
             Material bunnyMat = MeshSwatches.Matte(MeshSwatches.Emerald, 0.12, 0.00);
-            AddMeshAutoGround(s, @"assets\stanford-bunny.obj", bunnyMat, scale: 8f, targetPos: new Vec3(0.0f, 0.0f, -2.8f));
+            AddMeshAutoGround(s, @"assets\stanford-bunny.obj", bunnyMat, scale: 1f, targetPos: new Vec3(0, 0.5f, 1f));
             s.RebuildBVH();
             return s;
         }
@@ -124,7 +127,7 @@ namespace ConsoleGame.RayTracing.Scenes
         {
             Scene s = NewBaseScene();
             Material teapotMat = MeshSwatches.Matte(MeshSwatches.Ruby, 0.30, 0.06);
-            AddMeshAutoGround(s, @"assets\teapot.obj", teapotMat, scale: 0.60f, targetPos: new Vec3(0.0f, 0.0f, -3.0f));
+            AddMeshAutoGround(s, @"assets\teapot.obj", teapotMat, scale: 1f, targetPos: new Vec3(0, 0.5f, 1f));
             s.RebuildBVH();
             return s;
         }
@@ -134,7 +137,7 @@ namespace ConsoleGame.RayTracing.Scenes
             Scene s = NewBaseScene();
             s.DefaultCameraPos = new Vec3(0, 10, 0);
             Material dragonMat = MeshSwatches.Mirror(MeshSwatches.Sapphire, 0.70);
-            AddMeshAutoGround(s, @"assets\xyzrgb_dragon.obj", dragonMat, scale: 0.12f, targetPos: new Vec3(0.0f, 0.0f, -3.6f));
+            AddMeshAutoGround(s, @"assets\xyzrgb_dragon.obj", dragonMat, scale: 1f, targetPos: new Vec3(0, 0.5f, 1f));
             s.RebuildBVH();
             return s;
         }
@@ -146,10 +149,10 @@ namespace ConsoleGame.RayTracing.Scenes
             Material bunnyMat = MeshSwatches.Matte(MeshSwatches.Jade, 0.12, 0.00);
             Material teapotMat = MeshSwatches.Matte(MeshSwatches.Gold, 0.28, 0.06);
             Material dragonMat = MeshSwatches.Mirror(MeshSwatches.Amethyst, 0.65);
-            AddMeshAutoGround(s, @"assets\cow.obj", cowMat, scale: 0.80f, targetPos: new Vec3(-3.2f, 0.0f, -4.0f));
-            AddMeshAutoGround(s, @"assets\stanford-bunny.obj", bunnyMat, scale: 8f, targetPos: new Vec3(-1.0f, 0.0f, -3.0f));
-            AddMeshAutoGround(s, @"assets\teapot.obj", teapotMat, scale: 0.60f, targetPos: new Vec3(1.6f, 0.0f, -3.2f));
-            AddMeshAutoGround(s, @"assets\xyzrgb_dragon.obj", dragonMat, scale: 0.12f, targetPos: new Vec3(3.2f, 0.0f, -4.6f));
+            AddMeshAutoGround(s, @"assets\cow.obj", cowMat, scale: 1f, targetPos: new Vec3(-3.2f, 0.5f, -4.0f));
+            AddMeshAutoGround(s, @"assets\stanford-bunny.obj", bunnyMat, scale: 1f, targetPos: new Vec3(-1.0f, 0.5f, -3.0f));
+            AddMeshAutoGround(s, @"assets\teapot.obj", teapotMat, scale: 1f, targetPos: new Vec3(1.6f, 0.5f, -3.2f));
+            AddMeshAutoGround(s, @"assets\xyzrgb_dragon.obj", dragonMat, scale: 1f, targetPos: new Vec3(3.2f, 0.5f, -4.6f));
             s.RebuildBVH();
             return s;
         }
@@ -169,15 +172,170 @@ namespace ConsoleGame.RayTracing.Scenes
 
         private static void AddMeshAutoGround(Scene s, string objPath, Material mat, float scale, Vec3 targetPos)
         {
-            Vec3 mn, mx;
-            if (!TryReadObjBounds(objPath, out mn, out mx))
+            Vec3 mnN, mxN;
+            if (!TryReadObjBoundsNormalized(objPath, out mnN, out mxN))
             {
                 throw new FileNotFoundException("OBJ not found or empty", objPath);
             }
-            float minY = mn.Y;
-            float yTranslate = targetPos.Y - minY * scale + 0.01f;
+            float minYNormalized = mnN.Y;
+            float yTranslate = targetPos.Y - minYNormalized * scale + 0.01f;
             Vec3 translate = new Vec3(targetPos.X, yTranslate, targetPos.Z);
-            s.Objects.Add(Mesh.FromObj(objPath, mat, scale: scale, translate: translate));
+            s.Objects.Add(Mesh.FromObj(objPath, mat, scale: scale, translate: translate, normalize: true, targetSize: 1.0f));
+        }
+
+        private static bool TryReadObjBoundsNormalized(string path, out Vec3 min, out Vec3 max)
+        {
+            min = new Vec3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
+            max = new Vec3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
+            if (!File.Exists(path))
+            {
+                return false;
+            }
+
+            NumberFormatInfo nfi = CultureInfo.InvariantCulture.NumberFormat;
+            List<Vec3> positions = new List<Vec3>(1 << 16);
+            List<(int a, int b, int c)> faces = new List<(int, int, int)>(1 << 17);
+
+            using (var sr = new StreamReader(path))
+            {
+                string line;
+                while ((line = sr.ReadLine()) != null)
+                {
+                    if (line.Length == 0 || line[0] == '#') continue;
+                    string[] tok = line.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+                    if (tok.Length == 0) continue;
+
+                    if (tok[0] == "v" && tok.Length >= 4)
+                    {
+                        float x = float.Parse(tok[1], nfi);
+                        float y = float.Parse(tok[2], nfi);
+                        float z = float.Parse(tok[3], nfi);
+                        positions.Add(new Vec3(x, y, z));
+                    }
+                    else if (tok[0] == "f" && tok.Length >= 4)
+                    {
+                        int faceVerts = tok.Length - 1;
+                        int[] vIdx = new int[faceVerts];
+                        for (int i = 0; i < faceVerts; i++)
+                        {
+                            string[] parts = tok[i + 1].Split('/');
+                            int vi = ParseIndex(parts[0], positions.Count);
+                            vIdx[i] = vi;
+                        }
+                        for (int i = 2; i < faceVerts; i++)
+                        {
+                            faces.Add((vIdx[0], vIdx[i - 1], vIdx[i]));
+                        }
+                    }
+                }
+            }
+
+            if (positions.Count == 0 || faces.Count == 0) return false;
+
+            int vCount = positions.Count;
+            int fCount = faces.Count;
+
+            int[] parent = new int[vCount];
+            int[] rank = new int[vCount];
+            for (int i = 0; i < vCount; i++) { parent[i] = i; rank[i] = 0; }
+
+            int Find(int x) { while (x != parent[x]) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+            void Union(int x, int y) { int rx = Find(x), ry = Find(y); if (rx == ry) return; if (rank[rx] < rank[ry]) parent[rx] = ry; else if (rank[rx] > rank[ry]) parent[ry] = rx; else { parent[ry] = rx; rank[rx]++; } }
+
+            for (int i = 0; i < fCount; i++)
+            {
+                var (a, b, c) = faces[i];
+                Union(a, b);
+                Union(b, c);
+            }
+
+            Dictionary<int, List<int>> compToFaces = new Dictionary<int, List<int>>(128);
+            for (int i = 0; i < fCount; i++)
+            {
+                int r = Find(faces[i].a);
+                if (!compToFaces.TryGetValue(r, out var list)) { list = new List<int>(64); compToFaces[r] = list; }
+                list.Add(i);
+            }
+
+            int bestRoot = -1;
+            int bestCount = -1;
+            foreach (var kv in compToFaces)
+            {
+                int cnt = kv.Value.Count;
+                if (cnt > bestCount) { bestCount = cnt; bestRoot = kv.Key; }
+            }
+            if (bestRoot == -1) return false;
+
+            HashSet<int> usedVerts = new HashSet<int>();
+            List<(int a, int b, int c)> keptFaces = new List<(int a, int b, int c)>(bestCount);
+            var fi = compToFaces[bestRoot];
+            for (int i = 0; i < fi.Count; i++)
+            {
+                var f = faces[fi[i]];
+                keptFaces.Add(f);
+                usedVerts.Add(f.a); usedVerts.Add(f.b); usedVerts.Add(f.c);
+            }
+
+            Dictionary<int, int> remap = new Dictionary<int, int>(usedVerts.Count);
+            Vec3[] pos = new Vec3[usedVerts.Count];
+            int cursor = 0;
+            foreach (int ov in usedVerts)
+            {
+                remap[ov] = cursor;
+                pos[cursor] = positions[ov];
+                cursor++;
+            }
+            for (int i = 0; i < keptFaces.Count; i++)
+            {
+                var f = keptFaces[i];
+                keptFaces[i] = (remap[f.a], remap[f.b], remap[f.c]);
+            }
+
+            float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+            int triCount = keptFaces.Count;
+            for (int i = 0; i < triCount; i++)
+            {
+                Vec3 A = pos[keptFaces[i].a];
+                Vec3 B = pos[keptFaces[i].b];
+                Vec3 C = pos[keptFaces[i].c];
+                cx += (A.X + B.X + C.X) * (1.0f / 3.0f);
+                cy += (A.Y + B.Y + C.Y) * (1.0f / 3.0f);
+                cz += (A.Z + B.Z + C.Z) * (1.0f / 3.0f);
+            }
+            float invT = triCount > 0 ? 1.0f / triCount : 1.0f / MathF.Max(1, pos.Length);
+            cx *= invT; cy *= invT; cz *= invT;
+
+            float rMinX = float.PositiveInfinity, rMinY = float.PositiveInfinity, rMinZ = float.PositiveInfinity;
+            float rMaxX = float.NegativeInfinity, rMaxY = float.NegativeInfinity, rMaxZ = float.NegativeInfinity;
+
+            for (int i = 0; i < pos.Length; i++)
+            {
+                float x = pos[i].X - cx;
+                float y = pos[i].Y - cy;
+                float z = pos[i].Z - cz;
+                if (x < rMinX) rMinX = x; if (y < rMinY) rMinY = y; if (z < rMinZ) rMinZ = z;
+                if (x > rMaxX) rMaxX = x; if (y > rMaxY) rMaxY = y; if (z > rMaxZ) rMaxZ = z;
+            }
+
+            float rx = rMaxX - rMinX;
+            float ry = rMaxY - rMinY;
+            float rz = rMaxZ - rMinZ;
+            float maxExtent = rx; if (ry > maxExtent) maxExtent = ry; if (rz > maxExtent) maxExtent = rz;
+            if (maxExtent <= 0.0f) maxExtent = 1.0f;
+
+            float s = 1.0f / maxExtent;
+
+            min = new Vec3(rMinX * s, rMinY * s, rMinZ * s);
+            max = new Vec3(rMaxX * s, rMaxY * s, rMaxZ * s);
+            return true;
+        }
+
+        private static int ParseIndex(string token, int count)
+        {
+            if (string.IsNullOrEmpty(token)) return 0;
+            int idx = int.Parse(token, CultureInfo.InvariantCulture);
+            if (idx > 0) return idx - 1;
+            return count + idx;
         }
 
         private static bool TryReadObjBounds(string path, out Vec3 min, out Vec3 max)

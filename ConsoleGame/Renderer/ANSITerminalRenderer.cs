@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 
 namespace ConsoleGame.Renderer
 {
-    public class ANSITerminalRenderer
+    public class ANSITerminalRenderer : ITerminalRenderer
     {
         private readonly List<Framebuffer> frameBuffers;
         public int consoleWidth;
@@ -25,20 +25,6 @@ namespace ConsoleGame.Renderer
         private static readonly double[] s_cubeLinear = new double[6];
         private static readonly byte[] s_graySrgb = new byte[24];
         private static readonly double[] s_grayLinear = new double[24];
-
-        static ANSITerminalRenderer()
-        {
-            for (int i = 0; i < 6; i++)
-            {
-                s_cubeLinear[i] = Srgb8ToLinearNoClamp(s_cubeSrgb[i]);
-            }
-            for (int i = 0; i < 24; i++)
-            {
-                int v = 8 + 10 * i;
-                s_graySrgb[i] = (byte)v;
-                s_grayLinear[i] = Srgb8ToLinearNoClamp(v);
-            }
-        }
 
         public ANSITerminalRenderer(Action<int, int> onResize)
         {
@@ -380,6 +366,8 @@ namespace ConsoleGame.Renderer
         private const int STD_OUTPUT_HANDLE = -11;
         private const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
         private const uint DISABLE_NEWLINE_AUTO_RETURN = 0x0008;
+
+        int ITerminalRenderer.consoleWidth => this.consoleWidth;
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern IntPtr GetStdHandle(int nStdHandle);

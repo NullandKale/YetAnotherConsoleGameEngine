@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+using System.Linq;
 
 namespace ConsoleGame.RayTracing.Objects
 {
@@ -252,7 +253,7 @@ namespace ConsoleGame.RayTracing.Objects
             const float Eps = 1e-8f;
             if (det > -Eps && det < Eps)
             {
-                t = 0f; u = 0f; v = 0f; 
+                t = 0f; u = 0f; v = 0f;
                 return false;
             }
 
@@ -579,6 +580,25 @@ namespace ConsoleGame.RayTracing.Objects
         {
             float dx = maxX - minX, dy = maxY - minY, dz = maxZ - minZ;
             return 2.0f * (dx * dy + dx * dz + dy * dz);
+        }
+
+        public override bool TryGetBounds(out float minX, out float minY, out float minZ, out float maxX, out float maxY, out float maxZ, out float cx, out float cy, out float cz)
+        {
+            if (rootIndex < 0)
+            {
+                minX = minY = minZ = maxX = maxY = maxZ = cx = cy = cz = 0.0f;
+                return false;
+            }
+            minX = nodeMinX[rootIndex];
+            minY = nodeMinY[rootIndex];
+            minZ = nodeMinZ[rootIndex];
+            maxX = nodeMaxX[rootIndex];
+            maxY = nodeMaxY[rootIndex];
+            maxZ = nodeMaxZ[rootIndex];
+            cx = 0.5f * (minX + maxX);
+            cy = 0.5f * (minY + maxY);
+            cz = 0.5f * (minZ + maxZ);
+            return true;
         }
     }
 }

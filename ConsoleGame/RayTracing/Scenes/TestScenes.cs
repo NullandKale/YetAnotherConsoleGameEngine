@@ -6,6 +6,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using ConsoleRayTracing;
 using ConsoleGame.RayTracing.Objects;
+using ConsoleGame.RayTracing.Objects.BoundedSolids;
+using ConsoleGame.RayTracing.Objects.Surfaces;
 
 namespace ConsoleGame.RayTracing.Scenes
 {

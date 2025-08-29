@@ -22,7 +22,11 @@ namespace ConsoleGame.RayTracing.Objects
         private readonly Vector128<float> E14;
         private readonly Vector128<float> E24;
 
+        // Cached bounds (expanded slightly) and center.
+        private readonly float bMinX, bMinY, bMinZ, bMaxX, bMaxY, bMaxZ, bCx, bCy, bCz;
+
         private const float EpsDet = 1e-8f;
+        private const float BoundEps = 1e-4f;
 
         public Triangle(Vec3 a, Vec3 b, Vec3 c, Material mat)
         {
@@ -46,6 +50,19 @@ namespace ConsoleGame.RayTracing.Objects
                 E14 = Vector128.Create(e1x, e1y, e1z, 0f);
                 E24 = Vector128.Create(e2x, e2y, e2z, 0f);
             }
+
+            // Compute and cache expanded AABB and its center.
+            float mnx = MathF.Min(A.X, MathF.Min(B.X, C.X));
+            float mny = MathF.Min(A.Y, MathF.Min(B.Y, C.Y));
+            float mnz = MathF.Min(A.Z, MathF.Min(B.Z, C.Z));
+            float mxx = MathF.Max(A.X, MathF.Max(B.X, C.X));
+            float mxy = MathF.Max(A.Y, MathF.Max(B.Y, C.Y));
+            float mxz = MathF.Max(A.Z, MathF.Max(B.Z, C.Z));
+            bMinX = mnx - BoundEps; bMinY = mny - BoundEps; bMinZ = mnz - BoundEps;
+            bMaxX = mxx + BoundEps; bMaxY = mxy + BoundEps; bMaxZ = mxz + BoundEps;
+            bCx = 0.5f * (bMinX + bMaxX);
+            bCy = 0.5f * (bMinY + bMaxY);
+            bCz = 0.5f * (bMinZ + bMaxZ);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -155,6 +172,15 @@ namespace ConsoleGame.RayTracing.Objects
             rec.Mat = Mat;
             rec.U = uS;
             rec.V = vS;
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public override bool TryGetBounds(out float minX, out float minY, out float minZ, out float maxX, out float maxY, out float maxZ, out float cx, out float cy, out float cz)
+        {
+            minX = bMinX; minY = bMinY; minZ = bMinZ;
+            maxX = bMaxX; maxY = bMaxY; maxZ = bMaxZ;
+            cx = bCx; cy = bCy; cz = bCz;
             return true;
         }
     }

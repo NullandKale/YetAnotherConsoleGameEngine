@@ -302,5 +302,24 @@ namespace ConsoleGame.RayTracing.Objects
             if (ay >= ax && ay >= az) return 1;
             return 2;
         }
+
+        public override bool TryGetBounds(out float minX, out float minY, out float minZ, out float maxX, out float maxY, out float maxZ, out float cx, out float cy, out float cz)
+        {
+            if (nx <= 0 || ny <= 0 || nz <= 0)
+            {
+                minX = minY = minZ = maxX = maxY = maxZ = cx = cy = cz = 0.0f;
+                return false;
+            }
+            minX = (float)minCorner.X;
+            minY = (float)minCorner.Y;
+            minZ = (float)minCorner.Z;
+            maxX = (float)(minCorner.X + nx * voxelSize.X);
+            maxY = (float)(minCorner.Y + ny * voxelSize.Y);
+            maxZ = (float)(minCorner.Z + nz * voxelSize.Z);
+            cx = 0.5f * (minX + maxX);
+            cy = 0.5f * (minY + maxY);
+            cz = 0.5f * (minZ + maxZ);
+            return true;
+        }
     }
 }

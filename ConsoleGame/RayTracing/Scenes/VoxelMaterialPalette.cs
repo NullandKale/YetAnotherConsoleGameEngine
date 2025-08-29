@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using ConsoleGame.RayTracing.Scenes.WorldGeneration;
 
 namespace ConsoleGame.RayTracing.Scenes
 {

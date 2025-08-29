@@ -40,6 +40,15 @@ namespace ConsoleGame.Entities
             }
         }
 
+        public void HandleMouse(TerminalInput.MouseEvent me, float dt)
+        {
+            for (int i = 0; i < components.Count; i++)
+            {
+                BaseComponent component = components[i];
+                component.HandleMouse(me, dt);
+            }
+        }
+
         public void HandleInput(ConsoleKeyInfo keyInfo)
         {
             for (int i = 0; i < components.Count; i++)

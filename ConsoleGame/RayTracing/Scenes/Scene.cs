@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using ConsoleGame.RayTracing;
 using ConsoleGame.RayTracing.Objects;
+using ConsoleGame.Renderer;
 
 namespace ConsoleGame.RayTracing.Scenes
 {
@@ -27,14 +28,32 @@ namespace ConsoleGame.RayTracing.Scenes
         // Orbit state (toggle with Y)
         private bool OrbitMode = false;
         private Vec3 OrbitPivot = new Vec3(0.0, 0.0, 0.0);
-        private float OrbitRadius = 4.0f;                     // configurable; no longer overwritten on toggle
+        private float OrbitRadius = 4.0f;
         private float OrbitAngle = 0.0f;
         private float OrbitY = 1.0f;
-        private float OrbitRadiansPerSecond = 0.5f;           // ~12.6s per revolution
-        private const float OrbitPivotAhead = 4.0f;           // center is 2 units ahead of camera when toggled
-        private float TimeMS = 0.0f;                          // accumulated simulation time (ms)
-        private float LastOrbitToggleMS = -1_000_000.0f;      // last time we toggled (ms)
-        private const float OrbitToggleDebounceMS = 200.0f;   // debounce window for Y (ms)
+        private float OrbitRadiansPerSecond = 0.5f;
+        private const float OrbitPivotAhead = 4.0f;
+        private float TimeMS = 0.0f;
+        private float LastOrbitToggleMS = -1_000_000.0f;
+        private const float OrbitToggleDebounceMS = 200.0f;
+
+        // Mouse interaction state and tuning
+        public float MouseYawPitchPerPixel = 0.0035f;         // rad per "unit" from input
+        public float MousePanUnitsPerPixel = 0.01f;           // world units per "unit" from input
+        public float MouseWheelUnitsPerDelta = 0.0020f;
+        public float MouseOrbitYawPerPixel = 0.0075f;         // rad per "unit" from input
+        public float MouseOrbitYUnitsPerPixel = 0.01f;        // world units per "unit" from input
+        public float MouseOrbitRadiusPerDelta = 0.0040f;
+
+        // Adaptive scaling for coarse (cell-sized) mouse deltas
+        public float CoarseSensitivityBoost = 8.0f;           // multiply deltas when coarse input detected
+        private bool MouseRotating = false;
+        private bool MousePanning = false;
+        private int LastMouseX = 0;
+        private int LastMouseY = 0;
+        private bool CoarseMouse = false;
+        private int CoarseDetectCount = 0;
+        private const int CoarseDetectThreshold = 6;
 
         public virtual void RebuildBVH()
         {
@@ -62,6 +81,12 @@ namespace ConsoleGame.RayTracing.Scenes
             OrbitMode = false;
             TimeMS = 0.0f;
             LastOrbitToggleMS = -1_000_000.0f;
+            MouseRotating = false;
+            MousePanning = false;
+            LastMouseX = 0;
+            LastMouseY = 0;
+            CoarseMouse = false;
+            CoarseDetectCount = 0;
         }
 
         public virtual void Update(float deltaTimeMS)
@@ -197,7 +222,10 @@ namespace ConsoleGame.RayTracing.Scenes
                     LastOrbitToggleMS = TimeMS;
                     if (!OrbitMode)
                     {
-                        OrbitPivot = CameraPos + forwardXZ * OrbitPivotAhead;
+                        float cy2 = MathF.Cos(Yaw);
+                        float sy2 = MathF.Sin(Yaw);
+                        Vec3 forwardXZ2 = new Vec3(sy2, 0.0, -cy2);
+                        OrbitPivot = CameraPos + forwardXZ2 * OrbitPivotAhead;
                         OrbitY = (float)CameraPos.Y;
                         float dx = (float)(CameraPos.X - OrbitPivot.X);
                         float dz = (float)(CameraPos.Z - OrbitPivot.Z);
@@ -209,6 +237,171 @@ namespace ConsoleGame.RayTracing.Scenes
                     {
                         OrbitMode = false;
                     }
+                }
+            }
+        }
+
+        public virtual void HandleMouse(ConsoleGame.Renderer.TerminalInput.MouseEvent me, float dt)
+        {
+            if (dt < 0.0f)
+            {
+                dt = 0.0f;
+            }
+
+            if (me.Down)
+            {
+                if ((me.Buttons & ConsoleGame.Renderer.TerminalInput.MouseButtons.Right) != 0)
+                {
+                    MouseRotating = true;
+                    LastMouseX = me.X;
+                    LastMouseY = me.Y;
+                    CoarseDetectCount = 0;
+                }
+                if ((me.Buttons & ConsoleGame.Renderer.TerminalInput.MouseButtons.Middle) != 0)
+                {
+                    MousePanning = true;
+                    LastMouseX = me.X;
+                    LastMouseY = me.Y;
+                    CoarseDetectCount = 0;
+                }
+            }
+
+            if (me.Up)
+            {
+                if ((me.Buttons & ConsoleGame.Renderer.TerminalInput.MouseButtons.Right) != 0)
+                {
+                    MouseRotating = false;
+                }
+                if ((me.Buttons & ConsoleGame.Renderer.TerminalInput.MouseButtons.Middle) != 0)
+                {
+                    MousePanning = false;
+                }
+            }
+
+            if (me.Moved)
+            {
+                int dxPix = me.X - LastMouseX;
+                int dyPix = me.Y - LastMouseY;
+
+                int ax = Math.Abs(dxPix);
+                int ay = Math.Abs(dyPix);
+                if ((ax <= 1 && ay <= 1))
+                {
+                    if (CoarseDetectCount < CoarseDetectThreshold) CoarseDetectCount++;
+                    if (CoarseDetectCount >= CoarseDetectThreshold) CoarseMouse = true;
+                }
+                else
+                {
+                    if (CoarseDetectCount > 0) CoarseDetectCount--;
+                    if (ax > 2 || ay > 2) CoarseMouse = false;
+                }
+                float unitScale = CoarseMouse ? CoarseSensitivityBoost : 1.0f;
+
+                if (MouseRotating)
+                {
+                    if (OrbitMode)
+                    {
+                        OrbitAngle += (dxPix * unitScale) * MouseOrbitYawPerPixel;
+                        OrbitY -= (dyPix * unitScale) * MouseOrbitYUnitsPerPixel;
+                        float rx = MathF.Cos(OrbitAngle) * OrbitRadius;
+                        float rz = MathF.Sin(OrbitAngle) * OrbitRadius;
+                        CameraPos = new Vec3(OrbitPivot.X + rx, OrbitY, OrbitPivot.Z + rz);
+                        float dx = (float)(OrbitPivot.X - CameraPos.X);
+                        float dy = (float)(OrbitPivot.Y - CameraPos.Y);
+                        float dz = (float)(OrbitPivot.Z - CameraPos.Z);
+                        float horiz = MathF.Max(1e-6f, MathF.Sqrt(dx * dx + dz * dz));
+                        Yaw = MathF.Atan2(dx, -dz);
+                        Pitch = MathF.Atan2(dy, horiz);
+                        float limit = (MathF.PI * 0.5f) - 0.01f;
+                        if (Pitch > limit)
+                        {
+                            Pitch = limit;
+                        }
+                        if (Pitch < -limit)
+                        {
+                            Pitch = -limit;
+                        }
+                    }
+                    else
+                    {
+                        Yaw += (dxPix * unitScale) * MouseYawPitchPerPixel;
+                        Pitch -= (dyPix * unitScale) * MouseYawPitchPerPixel;
+                        float limit = (MathF.PI * 0.5f) - 0.01f;
+                        if (Pitch > limit)
+                        {
+                            Pitch = limit;
+                        }
+                        if (Pitch < -limit)
+                        {
+                            Pitch = -limit;
+                        }
+                    }
+                }
+
+                if (MousePanning)
+                {
+                    Vec3 forward, right, camUp;
+                    ComputeCameraBasis(out forward, out right, out camUp);
+                    Vec3 pan = (-(dxPix * unitScale) * MousePanUnitsPerPixel) * right + ((dyPix * unitScale) * MousePanUnitsPerPixel) * camUp;
+                    if (OrbitMode)
+                    {
+                        OrbitPivot = OrbitPivot + pan;
+                        CameraPos = CameraPos + pan;
+                    }
+                    else
+                    {
+                        CameraPos = CameraPos + pan;
+                    }
+                }
+
+                LastMouseX = me.X;
+                LastMouseY = me.Y;
+            }
+            else
+            {
+                if (!MouseRotating && !MousePanning)
+                {
+                    LastMouseX = me.X;
+                    LastMouseY = me.Y;
+                }
+            }
+
+            if (me.WheelDelta != 0)
+            {
+                if (OrbitMode)
+                {
+                    OrbitRadius -= me.WheelDelta * MouseOrbitRadiusPerDelta;
+                    if (OrbitRadius < 0.05f)
+                    {
+                        OrbitRadius = 0.05f;
+                    }
+                    float rx = MathF.Cos(OrbitAngle) * OrbitRadius;
+                    float rz = MathF.Sin(OrbitAngle) * OrbitRadius;
+                    CameraPos = new Vec3(OrbitPivot.X + rx, OrbitY, OrbitPivot.Z + rz);
+                    float dx = (float)(OrbitPivot.X - CameraPos.X);
+                    float dy = (float)(OrbitPivot.Y - CameraPos.Y);
+                    float dz = (float)(OrbitPivot.Z - CameraPos.Z);
+                    float horiz = MathF.Max(1e-6f, MathF.Sqrt(dx * dx + dz * dz));
+                    Yaw = MathF.Atan2(dx, -dz);
+                    Pitch = MathF.Atan2(dy, horiz);
+                    float limit = (MathF.PI * 0.5f) - 0.01f;
+                    if (Pitch > limit)
+                    {
+                        Pitch = limit;
+                    }
+                    if (Pitch < -limit)
+                    {
+                        Pitch = -limit;
+                    }
+                }
+                else
+                {
+                    float cy = MathF.Cos(Yaw);
+                    float sy = MathF.Sin(Yaw);
+                    float cp = MathF.Cos(Pitch);
+                    float sp = MathF.Sin(Pitch);
+                    Vec3 forward = new Vec3(sy * cp, sp, -cy * cp);
+                    CameraPos = CameraPos + forward * (me.WheelDelta * MouseWheelUnitsPerDelta);
                 }
             }
         }
@@ -227,6 +420,30 @@ namespace ConsoleGame.RayTracing.Scenes
             DefaultYaw = src.DefaultYaw;
             DefaultPitch = src.DefaultPitch;
             ResetCamera();
+        }
+
+        private void ComputeCameraBasis(out Vec3 forward, out Vec3 right, out Vec3 camUp)
+        {
+            float cy = MathF.Cos(Yaw);
+            float sy = MathF.Sin(Yaw);
+            float cp = MathF.Cos(Pitch);
+            float sp = MathF.Sin(Pitch);
+            forward = new Vec3(sy * cp, sp, -cy * cp);
+            Vec3 worldUp = new Vec3(0.0, 1.0, 0.0);
+            right = Normalize(Cross(forward, worldUp));
+            camUp = Normalize(Cross(right, forward));
+        }
+
+        private static Vec3 Normalize(Vec3 v)
+        {
+            float len = MathF.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
+            if (len <= 1e-12) return new Vec3(0.0, 0.0, 0.0);
+            return v * (1.0f / len);
+        }
+
+        private static Vec3 Cross(Vec3 a, Vec3 b)
+        {
+            return new Vec3(a.Y * b.Z - a.Z * b.Y, a.Z * b.X - a.X * b.Z, a.X * b.Y - a.Y * b.X);
         }
     }
 }

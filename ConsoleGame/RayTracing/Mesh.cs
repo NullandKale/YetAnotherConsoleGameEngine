@@ -12,14 +12,13 @@ namespace ConsoleGame.RayTracing
         public readonly Vec3 BoundsMin;
         public readonly Vec3 BoundsMax;
 
-        private readonly Hittable bvh; // local BVH over triangles
+        private readonly Hittable bvh;
 
         private Mesh(List<Triangle> triangles, Vec3 min, Vec3 max)
         {
             BoundsMin = min;
             BoundsMax = max;
             bvh = new MeshBVH(triangles);
-            //bvh = new BVH(triangles);
         }
 
         public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec, float screenU, float screenV)
@@ -36,11 +35,7 @@ namespace ConsoleGame.RayTracing
             CultureInfo ci = CultureInfo.InvariantCulture;
 
             List<Vec3> positions = new List<Vec3>(1 << 16);
-            List<Vec3> normals = new List<Vec3>(1 << 15); // optional, we don't require them
-            List<(float u, float v)> uvs = new List<(float, float)>(1 << 15); // optional
             List<(int a, int b, int c)> faces = new List<(int, int, int)>(1 << 17);
-
-            bool haveAny = false;
 
             using (var sr = new StreamReader(path))
             {
@@ -57,49 +52,32 @@ namespace ConsoleGame.RayTracing
                         float y = float.Parse(tok[2], ci);
                         float z = float.Parse(tok[3], ci);
                         positions.Add(new Vec3(x, y, z));
-                        if (!haveAny) haveAny = true;
-                    }
-                    else if (tok[0] == "vn" && tok.Length >= 4)
-                    {
-                        float x = float.Parse(tok[1], ci);
-                        float y = float.Parse(tok[2], ci);
-                        float z = float.Parse(tok[3], ci);
-                        normals.Add(new Vec3(x, y, z).Normalized());
-                    }
-                    else if (tok[0] == "vt" && tok.Length >= 3)
-                    {
-                        float u = float.Parse(tok[1], ci);
-                        float v = float.Parse(tok[2], ci);
-                        uvs.Add((u, v));
                     }
                     else if (tok[0] == "f" && tok.Length >= 4)
                     {
                         int faceVerts = tok.Length - 1;
                         int[] vIdx = new int[faceVerts];
-
                         for (int i = 0; i < faceVerts; i++)
                         {
                             string[] parts = tok[i + 1].Split('/');
                             int vi = ParseIndex(parts[0], positions.Count);
                             vIdx[i] = vi;
                         }
-
                         for (int i = 2; i < faceVerts; i++)
                         {
                             faces.Add((vIdx[0], vIdx[i - 1], vIdx[i]));
                         }
                     }
-                    // ignore: mtllib/usemtl/o/g/s — keep loader minimal and robust
                 }
             }
 
-            if (!haveAny || faces.Count == 0) throw new InvalidDataException("OBJ had no triangles.");
+            if (positions.Count == 0 || faces.Count == 0) throw new InvalidDataException("OBJ had no triangles.");
 
             Vec3[] pos = positions.ToArray();
 
             if (normalize)
             {
-                NormalizeToCanonical(ref pos, targetSize);
+                NormalizeAndPruneLargestComponent(ref pos, ref faces, targetSize);
             }
 
             if (scale != 1.0f || t.X != 0.0f || t.Y != 0.0f || t.Z != 0.0f)
@@ -143,81 +121,114 @@ namespace ConsoleGame.RayTracing
             return count + idx;
         }
 
-        private static void NormalizeToCanonical(ref Vec3[] pos, float targetSize)
+        private static void NormalizeAndPruneLargestComponent(ref Vec3[] pos, ref List<(int a, int b, int c)> faces, float targetSize)
         {
+            int vCount = pos.Length;
+            int fCount = faces.Count;
+
+            int[] parent = new int[vCount];
+            int[] rank = new int[vCount];
+            for (int i = 0; i < vCount; i++) { parent[i] = i; rank[i] = 0; }
+
+            int Find(int x) { while (x != parent[x]) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+            void Union(int x, int y) { int rx = Find(x), ry = Find(y); if (rx == ry) return; if (rank[rx] < rank[ry]) parent[rx] = ry; else if (rank[rx] > rank[ry]) parent[ry] = rx; else { parent[ry] = rx; rank[rx]++; } }
+
+            for (int i = 0; i < fCount; i++)
+            {
+                var (a, b, c) = faces[i];
+                Union(a, b); Union(b, c);
+            }
+
+            Dictionary<int, List<int>> compToFaces = new Dictionary<int, List<int>>(128);
+            for (int i = 0; i < fCount; i++)
+            {
+                int ra = Find(faces[i].a);
+                if (!compToFaces.TryGetValue(ra, out var list)) { list = new List<int>(64); compToFaces[ra] = list; }
+                list.Add(i);
+            }
+
+            int bestRoot = -1;
+            int bestCount = -1;
+            foreach (var kv in compToFaces)
+            {
+                int cnt = kv.Value.Count;
+                if (cnt > bestCount) { bestCount = cnt; bestRoot = kv.Key; }
+            }
+
+            if (bestRoot == -1) return;
+
+            HashSet<int> usedVerts = new HashSet<int>();
+            List<(int a, int b, int c)> newFaces = new List<(int a, int b, int c)>(bestCount);
+            var faceIdx = compToFaces[bestRoot];
+            for (int i = 0; i < faceIdx.Count; i++)
+            {
+                var f = faces[faceIdx[i]];
+                newFaces.Add(f);
+                usedVerts.Add(f.a); usedVerts.Add(f.b); usedVerts.Add(f.c);
+            }
+
+            Dictionary<int, int> remap = new Dictionary<int, int>(usedVerts.Count);
+            Vec3[] newPos = new Vec3[usedVerts.Count];
+            int cursor = 0;
+            foreach (int ov in usedVerts)
+            {
+                remap[ov] = cursor;
+                newPos[cursor] = pos[ov];
+                cursor++;
+            }
+
+            for (int i = 0; i < newFaces.Count; i++)
+            {
+                var f = newFaces[i];
+                newFaces[i] = (remap[f.a], remap[f.b], remap[f.c]);
+            }
+
+            pos = newPos;
+            faces = newFaces;
+
+            float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+            int triCount = faces.Count;
+            for (int i = 0; i < triCount; i++)
+            {
+                Vec3 A = pos[faces[i].a];
+                Vec3 B = pos[faces[i].b];
+                Vec3 C = pos[faces[i].c];
+                cx += (A.X + B.X + C.X) * (1.0f / 3.0f);
+                cy += (A.Y + B.Y + C.Y) * (1.0f / 3.0f);
+                cz += (A.Z + B.Z + C.Z) * (1.0f / 3.0f);
+            }
+            float invT = triCount > 0 ? 1.0f / triCount : 1.0f / MathF.Max(1, pos.Length);
+            cx *= invT; cy *= invT; cz *= invT;
+
             float minX = float.PositiveInfinity, minY = float.PositiveInfinity, minZ = float.PositiveInfinity;
             float maxX = float.NegativeInfinity, maxY = float.NegativeInfinity, maxZ = float.NegativeInfinity;
 
             for (int i = 0; i < pos.Length; i++)
             {
-                Vec3 p = pos[i];
-                if (p.X < minX) minX = p.X; if (p.Y < minY) minY = p.Y; if (p.Z < minZ) minZ = p.Z;
-                if (p.X > maxX) maxX = p.X; if (p.Y > maxY) maxY = p.Y; if (p.Z > maxZ) maxZ = p.Z;
+                float x = pos[i].X - cx;
+                float y = pos[i].Y - cy;
+                float z = pos[i].Z - cz;
+                pos[i] = new Vec3(x, y, z);
+                if (x < minX) minX = x; if (y < minY) minY = y; if (z < minZ) minZ = z;
+                if (x > maxX) maxX = x; if (y > maxY) maxY = y; if (z > maxZ) maxZ = z;
             }
 
-            float sx = maxX - minX;
-            float sy = maxY - minY;
-            float sz = maxZ - minZ;
-
-            int upAxis = 1;
-            if (sz >= sy && sz >= sx) upAxis = 2;
-            else if (sx >= sy && sx >= sz) upAxis = 0;
-
-            for (int i = 0; i < pos.Length; i++)
-            {
-                pos[i] = RotateToYUp(pos[i], upAxis);
-            }
-
-            float rMinX = float.PositiveInfinity, rMinY = float.PositiveInfinity, rMinZ = float.PositiveInfinity;
-            float rMaxX = float.NegativeInfinity, rMaxY = float.NegativeInfinity, rMaxZ = float.NegativeInfinity;
-
-            for (int i = 0; i < pos.Length; i++)
-            {
-                Vec3 p = pos[i];
-                if (p.X < rMinX) rMinX = p.X; if (p.Y < rMinY) rMinY = p.Y; if (p.Z < rMinZ) rMinZ = p.Z;
-                if (p.X > rMaxX) rMaxX = p.X; if (p.Y > rMaxY) rMaxY = p.Y; if (p.Z > rMaxZ) rMaxZ = p.Z;
-            }
-
-            float rx = rMaxX - rMinX;
-            float ry = rMaxY - rMinY;
-            float rz = rMaxZ - rMinZ;
-            float maxExtent = rx;
-            if (ry > maxExtent) maxExtent = ry;
-            if (rz > maxExtent) maxExtent = rz;
+            float rx = maxX - minX;
+            float ry = maxY - minY;
+            float rz = maxZ - minZ;
+            float maxExtent = rx; if (ry > maxExtent) maxExtent = ry; if (rz > maxExtent) maxExtent = rz;
             if (maxExtent <= 0.0f) maxExtent = 1.0f;
 
             float s = targetSize / maxExtent;
-
-            float cx = (rMinX + rMaxX) * 0.5f;
-            float cy = (rMinY + rMaxY) * 0.5f;
-            float cz = (rMinZ + rMaxZ) * 0.5f;
-
             for (int i = 0; i < pos.Length; i++)
             {
-                float x = (pos[i].X - cx) * s;
-                float y = (pos[i].Y - cy) * s;
-                float z = (pos[i].Z - cz) * s;
-                pos[i] = new Vec3(x, y, z);
+                pos[i] = new Vec3(pos[i].X * s, pos[i].Y * s, pos[i].Z * s);
             }
         }
 
-        private static Vec3 RotateToYUp(Vec3 p, int upAxis)
+        public override bool TryGetBounds(out float minX, out float minY, out float minZ, out float maxX, out float maxY, out float maxZ, out float cx, out float cy, out float cz)
         {
-            if (upAxis == 1)
-            {
-                return p;
-            }
-            if (upAxis == 2)
-            {
-                float x = p.X;
-                float y = p.Z;
-                float z = -p.Y;
-                return new Vec3(x, y, z);
-            }
-            float nx = -p.Y;
-            float ny = p.X;
-            float nz = p.Z;
-            return new Vec3(nx, ny, nz);
+            return bvh.TryGetBounds(out minX, out minY, out minZ, out maxX, out maxY, out maxZ, out cx, out cy, out cz);
         }
     }
 }
