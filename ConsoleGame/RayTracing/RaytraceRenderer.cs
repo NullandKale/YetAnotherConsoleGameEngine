@@ -32,24 +32,16 @@ namespace ConsoleGame.RayTracing
         private const int DiffuseBounces = 1;
         private const int IndirectSamples = 1;
         private const int MaxMirrorBounces = 2;
-        private const int MaxRefractions = 2;
+        private const int MaxRefractions = 1;
         private const float MirrorThreshold = 0.9f;
         private const float Eps = 1e-4f;
 
         private const float MaxLuminance = 1.0f;
         private const ulong SeedSalt = 0x9E3779B97F4A7C15UL;
 
-        private Vec3[,] history;
-        private bool historyValid = false;
         private float taaAlpha = 0.05f;
         private const float MotionTransReset = 0.0025f;
         private const float MotionRotReset = 0.0025f;
-
-        private float lastCamX = float.NaN;
-        private float lastCamY = float.NaN;
-        private float lastCamZ = float.NaN;
-        private float lastYaw = float.NaN;
-        private float lastPitch = float.NaN;
 
         private Ray[,] rays;
 
@@ -57,20 +49,10 @@ namespace ConsoleGame.RayTracing
         private FixedThreadFor threadpool;
         private PixelThreadPool pixelPool;
 
-        private float toneExposure = 1.0f;
-        private float toneGamma = 2.2f;
-
-        private bool autoExposure = true;
-        private float aeKey = 0.18f;
-        private float aeSpeed = 0.2f;
-        private float aeExposure = 1.0f;
-        private float aeMin = 0.35f;
-        private float aeMax = 3.0f;
-
-        private float shadowContrast = 1.15f; // >1 increases contrast, focused towards shadows
-        private float shadowPivot = 0.22f;    // pivot luminance in SDR linear [0..1] that separates "shadows" from mids
-
         private bool[,] skyMask;
+
+        private TemporalAA taa;
+        private ToneMapper toneMapper;
 
         public RaytraceRenderer(Framebuffer framebuffer, Scene scene, float fovDeg, int pxW, int pxH, int superSample)
         {
@@ -88,9 +70,11 @@ namespace ConsoleGame.RayTracing
             hiH = fbH * 2 * ss;
 
             frameBuffer = new Chexel[fbW, fbH];
-            history = new Vec3[hiW, hiH];
             rays = new Ray[hiW, hiH];
             skyMask = new bool[hiW, hiH];
+
+            taa = new TemporalAA(hiW, hiH, taaAlpha, MotionTransReset, MotionRotReset);
+            toneMapper = new ToneMapper();
 
             scene.RebuildBVH();
         }
@@ -107,16 +91,10 @@ namespace ConsoleGame.RayTracing
             hiH = fbH * 2 * ss;
 
             frameBuffer = new Chexel[fbW, fbH];
-            history = new Vec3[hiW, hiH];
             rays = new Ray[hiW, hiH];
             skyMask = new bool[hiW, hiH];
 
-            historyValid = false;
-            lastCamX = float.NaN;
-            lastCamY = float.NaN;
-            lastCamZ = float.NaN;
-            lastYaw = float.NaN;
-            lastPitch = float.NaN;
+            taa.Resize(hiW, hiH);
         }
 
         public void SetCamera(Vec3 pos, float yaw, float pitch)
@@ -134,26 +112,7 @@ namespace ConsoleGame.RayTracing
             this.fovDeg = fovDeg;
         }
 
-        public void SetToneMapping(float exposure, float gamma)
-        {
-            toneExposure = MathF.Max(0.001f, exposure);
-            toneGamma = MathF.Max(0.1f, gamma);
-        }
-
-        public void SetAutoExposure(bool enabled, float key = 0.18f, float speed = 0.2f, float minExposure = 0.35f, float maxExposure = 3.0f)
-        {
-            autoExposure = enabled;
-            aeKey = MathF.Max(1e-4f, key);
-            aeSpeed = MathF.Max(0.0f, speed);
-            aeMin = MathF.Max(0.001f, minExposure);
-            aeMax = MathF.Max(aeMin, maxExposure);
-        }
-
-        public void SetShadowContrast(float contrast, float pivot)
-        {
-            shadowContrast = MathF.Max(0.1f, contrast);
-            shadowPivot = MathF.Max(0.0f, MathF.Min(1.0f, pivot));
-        }
+        Vec3[,] currentHdr = null;
 
         public void TryFlipAndBlit(Framebuffer fb)
         {
@@ -169,8 +128,7 @@ namespace ConsoleGame.RayTracing
                 pitchSnapshot = pitch;
             }
 
-            bool resetHistory = ShouldResetHistory(camPosSnapshot, yawSnapshot, pitchSnapshot);
-            float blendAlpha = resetHistory || !historyValid ? 1.0f : taaAlpha;
+            bool resetHistory = taa.ShouldResetHistory(camPosSnapshot, yawSnapshot, pitchSnapshot);
 
             Camera cam = BuildCamera(camPosSnapshot, yawSnapshot, pitchSnapshot, fovDeg, aspect);
 
@@ -195,6 +153,11 @@ namespace ConsoleGame.RayTracing
                 }
             });
 
+            if (currentHdr == null || currentHdr.Length != hiH * hiW)
+            {
+                currentHdr = new Vec3[hiW, hiH];
+            }
+
             pixelPool.For2D(hiW, hiH, (px, py, threadId) =>
             {
                 Rng rng = new Rng(PerFrameSeed(px, py, frame, 0, 0));
@@ -216,54 +179,13 @@ namespace ConsoleGame.RayTracing
                     cur = TraceFull(scene, rays[px, py], 0, 0, ref rng, uCenter, vCenter);
                 }
 
-                Vec3 prev = history[px, py];
-                float ia = 1.0f - blendAlpha;
-                Vec3 blended = new Vec3(prev.X * ia + cur.X * blendAlpha, prev.Y * ia + cur.Y * blendAlpha, prev.Z * ia + cur.Z * blendAlpha);
-                history[px, py] = blended;
+                currentHdr[px, py] = cur;
             });
 
-            float effectiveExposure = toneExposure;
-            if (autoExposure)
-            {
-                int step = Math.Max(2, ss * 2);
-                float[] logSum = new float[procCount];
-                int[] cnt = new int[procCount];
-                threadpool.For(0, procCount, worker =>
-                {
-                    int yStart = worker * hiH / procCount;
-                    int yEnd = (worker + 1) * hiH / procCount;
-                    float sum = 0.0f;
-                    int c = 0;
-                    for (int py = yStart; py < yEnd; py += step)
-                    {
-                        for (int px = 0; px < hiW; px += step)
-                        {
-                            if (skyMask[px, py]) continue;
-                            Vec3 h = history[px, py];
-                            float lum = 0.2126f * h.X + 0.7152f * h.Y + 0.0722f * h.Z;
-                            sum += MathF.Log(1e-6f + lum);
-                            c++;
-                        }
-                    }
-                    logSum[worker] = sum;
-                    cnt[worker] = c;
-                });
-                float totalLog = 0.0f;
-                int totalCount = 0;
-                for (int i = 0; i < procCount; i++)
-                {
-                    totalLog += logSum[i];
-                    totalCount += cnt[i];
-                }
-                float avgLog = totalCount > 0 ? totalLog / totalCount : 0.0f;
-                float avgLum = MathF.Exp(avgLog);
-                float targetExp = totalCount > 0 ? aeKey / MathF.Max(1e-6f, avgLum) : aeExposure;
-                if (targetExp < aeMin) targetExp = aeMin;
-                if (targetExp > aeMax) targetExp = aeMax;
-                float s = 1.0f - MathF.Exp(-aeSpeed);
-                aeExposure = aeExposure + (targetExp - aeExposure) * s;
-                effectiveExposure = toneExposure * aeExposure;
-            }
+            Vec3[,] blendedHdr = taa.BlendIntoHistory(currentHdr, resetHistory);
+
+            int step = Math.Max(2, ss * 2);
+            toneMapper.UpdateExposure(blendedHdr, skyMask, step);
 
             threadpool.For(0, procCount, worker =>
             {
@@ -285,16 +207,16 @@ namespace ConsoleGame.RayTracing
                             for (int sx = 0; sx < ss; sx++)
                             {
                                 int x = xPx0 + sx;
-                                topSum = topSum + history[x, yTop];
-                                botSum = botSum + history[x, yBot];
+                                topSum = topSum + blendedHdr[x, yTop];
+                                botSum = botSum + blendedHdr[x, yBot];
                             }
                         }
                         float inv = 1.0f / (ss * ss);
                         Vec3 topAvg = new Vec3(topSum.X * inv, topSum.Y * inv, topSum.Z * inv);
                         Vec3 botAvg = new Vec3(botSum.X * inv, botSum.Y * inv, botSum.Z * inv);
 
-                        Vec3 topSDR = ToneMapAndEncode(topAvg, effectiveExposure, toneGamma, shadowContrast, shadowPivot);
-                        Vec3 botSDR = ToneMapAndEncode(botAvg, effectiveExposure, toneGamma, shadowContrast, shadowPivot);
+                        Vec3 topSDR = toneMapper.MapPixel(topAvg);
+                        Vec3 botSDR = toneMapper.MapPixel(botAvg);
 
                         target[cx, cy] = new Chexel('▀', topSDR, botSDR);
                     }
@@ -314,23 +236,7 @@ namespace ConsoleGame.RayTracing
                 }
             });
 
-            historyValid = true;
-            lastCamX = camPosSnapshot.X;
-            lastCamY = camPosSnapshot.Y;
-            lastCamZ = camPosSnapshot.Z;
-            lastYaw = yawSnapshot;
-            lastPitch = pitchSnapshot;
-        }
-
-        private bool ShouldResetHistory(Vec3 cam, float y, float p)
-        {
-            float dx = cam.X - lastCamX;
-            float dy = cam.Y - lastCamY;
-            float dz = cam.Z - lastCamZ;
-            float trans = float.IsNaN(dx) ? 0.0f : MathF.Sqrt(dx * dx + dy * dy + dz * dz);
-            float dyaw = float.IsNaN(lastYaw) ? 0.0f : MathF.Abs(y - lastYaw);
-            float dpitch = float.IsNaN(lastPitch) ? 0.0f : MathF.Abs(p - lastPitch);
-            return trans > MotionTransReset || dyaw > MotionRotReset || dpitch > MotionRotReset;
+            taa.CommitCamera(camPosSnapshot, yawSnapshot, pitchSnapshot);
         }
 
         private static Camera BuildCamera(Vec3 pos, float yaw, float pitch, float fovDeg, float aspect)
@@ -604,71 +510,6 @@ namespace ConsoleGame.RayTracing
             if (y <= maxY) return c;
             float s = maxY / MathF.Max(y, 1e-6f);
             return new Vec3(c.X * s, c.Y * s, c.Z * s);
-        }
-
-        private static Vec3 ToneMapAndEncode(Vec3 hdr, float exposure, float gamma, float shadowContrast, float shadowPivot)
-        {
-            float r = MathF.Max(0.0f, hdr.X);
-            float g = MathF.Max(0.0f, hdr.Y);
-            float b = MathF.Max(0.0f, hdr.Z);
-
-            r *= exposure;
-            g *= exposure;
-            b *= exposure;
-
-            r = ACESFilm(r);
-            g = ACESFilm(g);
-            b = ACESFilm(b);
-
-            Vec3 sdr = new Vec3(r, g, b);
-            sdr = ApplyShadowContrast(sdr, shadowContrast, shadowPivot);
-
-            float invGamma = 1.0f / MathF.Max(0.1f, gamma);
-            sdr = new Vec3(MathF.Pow(Saturate01(sdr.X), invGamma), MathF.Pow(Saturate01(sdr.Y), invGamma), MathF.Pow(Saturate01(sdr.Z), invGamma));
-
-            return new Vec3(Saturate01(sdr.X), Saturate01(sdr.Y), Saturate01(sdr.Z));
-        }
-
-        private static Vec3 ApplyShadowContrast(Vec3 sdrLinear, float contrast, float pivot)
-        {
-            float L = 0.2126f * sdrLinear.X + 0.7152f * sdrLinear.Y + 0.0722f * sdrLinear.Z;
-            float w = 1.0f - Smoothstep(0.0f, MathF.Max(1e-6f, pivot), L);
-            float cEff = 1.0f + (contrast - 1.0f) * w;
-            float Lc = (L - pivot) * cEff + pivot;
-            if (L <= 1e-6f) return new Vec3(0.0f, 0.0f, 0.0f);
-            float scale = Saturate01(Lc) / L;
-            return new Vec3(Saturate01(sdrLinear.X * scale), Saturate01(sdrLinear.Y * scale), Saturate01(sdrLinear.Z * scale));
-        }
-
-        private static float Smoothstep(float a, float b, float x)
-        {
-            if (b <= a) return x <= a ? 0.0f : 1.0f;
-            float t = (x - a) / (b - a);
-            if (t < 0.0f) t = 0.0f;
-            if (t > 1.0f) t = 1.0f;
-            return t * t * (3.0f - 2.0f * t);
-        }
-
-        private static float Saturate01(float v)
-        {
-            if (v < 0.0f) return 0.0f;
-            if (v > 1.0f) return 1.0f;
-            return v;
-        }
-
-        private static float ACESFilm(float x)
-        {
-            float a = 2.51f;
-            float b = 0.03f;
-            float c = 2.43f;
-            float d = 0.59f;
-            float e = 0.14f;
-            float num = x * (a * x + b);
-            float den = x * (c * x + d) + e;
-            float y = den > 0.0f ? num / den : 0.0f;
-            if (y < 0.0f) y = 0.0f;
-            if (y > 1.0f) y = 1.0f;
-            return y;
         }
     }
 }

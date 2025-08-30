@@ -1,6 +1,7 @@
 ﻿// File: PixelThreadPool.cs
 using System;
 using System.Threading;
+using System.Collections.Concurrent;
 
 namespace ConsoleGame.Threads
 {
@@ -22,18 +23,14 @@ namespace ConsoleGame.Threads
             public int N;
             public int A;
             public int B;
-            public int ThreadCount;
             public int ThreadId;
-            public int Epoch;
+            public CountdownEvent Done;
+            public bool Stop;
         }
 
         private readonly Thread[] threads;
         private readonly string threadNamePrefix;
-        private readonly Job[] jobs;
-
-        private volatile int jobEpoch;
-        private volatile int jobsRemaining;
-        private readonly ManualResetEventSlim jobDone;
+        private readonly BlockingCollection<Job>[] queues;
 
         private volatile bool stop;
 
@@ -45,12 +42,12 @@ namespace ConsoleGame.Threads
             ThreadCount = threadCount;
             threadNamePrefix = namePrefix ?? "PTP";
             threads = new Thread[ThreadCount];
-            jobs = new Job[ThreadCount];
-            jobDone = new ManualResetEventSlim(false);
+            queues = new BlockingCollection<Job>[ThreadCount];
             stop = false;
 
             for (int i = 0; i < ThreadCount; i++)
             {
+                queues[i] = new BlockingCollection<Job>(new ConcurrentQueue<Job>());
                 int workerId = i;
                 threads[i] = new Thread(() => WorkerLoop(workerId));
                 threads[i].IsBackground = true;
@@ -73,54 +70,54 @@ namespace ConsoleGame.Threads
             if (nLong > int.MaxValue) throw new ArgumentOutOfRangeException(nameof(width), "width*height must fit in Int32.");
             int N = (int)nLong;
 
-            int epoch = unchecked(Volatile.Read(ref jobEpoch) + 1);
-
-            int seed = unchecked(Environment.TickCount ^ (width * 73856093) ^ (height * 19349663) ^ (epoch * 83492791));
+            int seed = unchecked(Environment.TickCount ^ (width * 73856093) ^ (height * 19349663));
             SplitMix32 sm = new SplitMix32((uint)seed);
             int a = FindCoprimeMultiplier(N, ref sm);
             int b = PositiveMod((int)sm.Next(), N);
 
-            Volatile.Write(ref jobsRemaining, ThreadCount);
-            jobDone.Reset();
-
-            for (int t = 0; t < ThreadCount; t++)
+            using (var done = new CountdownEvent(ThreadCount))
             {
-                Job j = new Job();
-                j.Body = body;
-                j.Width = width;
-                j.Height = height;
-                j.N = N;
-                j.A = a;
-                j.B = b;
-                j.ThreadCount = ThreadCount;
-                j.ThreadId = t;
-                j.Epoch = epoch;
-                Volatile.Write(ref jobs[t], j);
+                for (int t = 0; t < ThreadCount; t++)
+                {
+                    Job j = new Job();
+                    j.Body = body;
+                    j.Width = width;
+                    j.Height = height;
+                    j.N = N;
+                    j.A = a;
+                    j.B = b;
+                    j.ThreadId = t;
+                    j.Done = done;
+                    j.Stop = false;
+                    queues[t].Add(j);
+                }
+
+                done.Wait();
             }
-
-            Interlocked.Exchange(ref jobEpoch, epoch);
-
-            jobDone.Wait();
         }
 
         private void WorkerLoop(int workerId)
         {
-            int seenEpoch = Volatile.Read(ref jobEpoch);
-            while (!Volatile.Read(ref stop))
+            while (true)
             {
-                int curEpoch = Volatile.Read(ref jobEpoch);
-                if (curEpoch == seenEpoch)
+                Job job;
+                try
                 {
-                    Thread.Sleep(1);
+                    job = queues[workerId].Take();
+                }
+                catch (InvalidOperationException)
+                {
+                    break;
+                }
+
+                if (job == null)
+                {
                     continue;
                 }
 
-                seenEpoch = curEpoch;
-
-                Job job = Volatile.Read(ref jobs[workerId]);
-                if (job == null || job.Epoch != curEpoch)
+                if (job.Stop)
                 {
-                    continue;
+                    break;
                 }
 
                 ExecuteJob(job);
@@ -135,7 +132,7 @@ namespace ConsoleGame.Threads
                 int N = job.N;
                 int a = job.A;
                 int b = job.B;
-                int step = job.ThreadCount;
+                int step = ThreadCount;
                 int start = job.ThreadId;
 
                 for (int k = start; k < N; k += step)
@@ -154,9 +151,12 @@ namespace ConsoleGame.Threads
             }
             finally
             {
-                if (Interlocked.Decrement(ref jobsRemaining) == 0)
+                try
                 {
-                    jobDone.Set();
+                    job.Done.Signal();
+                }
+                catch
+                {
                 }
             }
         }
@@ -228,8 +228,16 @@ namespace ConsoleGame.Threads
             if (!stop)
             {
                 stop = true;
-                Interlocked.Increment(ref jobEpoch);
-                jobDone.Set();
+                for (int i = 0; i < threads.Length; i++)
+                {
+                    try
+                    {
+                        queues[i].Add(new Job { Stop = true });
+                    }
+                    catch
+                    {
+                    }
+                }
                 for (int i = 0; i < threads.Length; i++)
                 {
                     try
@@ -241,7 +249,16 @@ namespace ConsoleGame.Threads
                     }
                 }
             }
-            jobDone.Dispose();
+            for (int i = 0; i < queues.Length; i++)
+            {
+                try
+                {
+                    queues[i]?.Dispose();
+                }
+                catch
+                {
+                }
+            }
         }
     }
 }

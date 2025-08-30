@@ -94,14 +94,14 @@ namespace ConsoleGame.Renderer
 
         public bool TryGetMouseEvent(out MouseEvent mouseEvent)
         {
-            //lock (mouseLock)
-            //{
-            //    if (mouseQueue.Count > 0)
-            //    {
-            //        mouseEvent = mouseQueue.Dequeue();
-            //        return true;
-            //    }
-            //}
+            lock (mouseLock)
+            {
+                if (mouseQueue.Count > 0)
+                {
+                    mouseEvent = mouseQueue.Dequeue();
+                    return true;
+                }
+            }
 
             mouseEvent = default;
             return false;
