@@ -3,7 +3,6 @@ using ConsoleGame.Renderer;
 using ConsoleGame.Threads;
 using ConsoleRayTracing;
 using System;
-using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -20,7 +19,7 @@ namespace ConsoleGame.RayTracing
         private int fbW;
         private int fbH;
 
-        private Chexel[,] frameBuffer;
+        private Fast2D<Chexel> frameBuffer;
 
         private long frameCounter = 0;
 
@@ -31,7 +30,7 @@ namespace ConsoleGame.RayTracing
 
         private const int DiffuseBounces = 1;
         private const int IndirectSamples = 1;
-        private const int MaxMirrorBounces = 2;
+        private const int MaxMirrorBounces = 1;
         private const int MaxRefractions = 1;
         private const float MirrorThreshold = 0.9f;
         private const float Eps = 1e-4f;
@@ -43,16 +42,20 @@ namespace ConsoleGame.RayTracing
         private const float MotionTransReset = 0.0025f;
         private const float MotionRotReset = 0.0025f;
 
-        private Ray[,] rays;
+        private Fast2D<Ray> rays;
 
         private int procCount;
         private FixedThreadFor threadpool;
         private PixelThreadPool pixelPool;
 
-        private bool[,] skyMask;
+        private Fast2D<bool> skyMask;
 
         private TemporalAA taa;
         private ToneMapper toneMapper;
+
+        private const float Pi = 3.14159265358979323846f;
+        private const float InvPi = 1.0f / Pi;
+        private const float DiffuseSigmaDeg = 25.0f;
 
         public RaytraceRenderer(Framebuffer framebuffer, Scene scene, float fovDeg, int pxW, int pxH, int superSample)
         {
@@ -69,9 +72,9 @@ namespace ConsoleGame.RayTracing
             hiW = fbW * ss;
             hiH = fbH * 2 * ss;
 
-            frameBuffer = new Chexel[fbW, fbH];
-            rays = new Ray[hiW, hiH];
-            skyMask = new bool[hiW, hiH];
+            frameBuffer = new Fast2D<Chexel>(fbW, fbH);
+            rays = new Fast2D<Ray>(hiW, hiH);
+            skyMask = new Fast2D<bool>(hiW, hiH);
 
             taa = new TemporalAA(hiW, hiH, taaAlpha, MotionTransReset, MotionRotReset);
             toneMapper = new ToneMapper();
@@ -90,9 +93,9 @@ namespace ConsoleGame.RayTracing
             hiW = fbW * ss;
             hiH = fbH * 2 * ss;
 
-            frameBuffer = new Chexel[fbW, fbH];
-            rays = new Ray[hiW, hiH];
-            skyMask = new bool[hiW, hiH];
+            frameBuffer = new Fast2D<Chexel>(fbW, fbH);
+            rays = new Fast2D<Ray>(hiW, hiH);
+            skyMask = new Fast2D<bool>(hiW, hiH);
 
             taa.Resize(hiW, hiH);
         }
@@ -112,7 +115,7 @@ namespace ConsoleGame.RayTracing
             this.fovDeg = fovDeg;
         }
 
-        Vec3[,] currentHdr = null;
+        Fast2D<Vec3> currentHdr = null;
 
         public void TryFlipAndBlit(Framebuffer fb)
         {
@@ -135,10 +138,10 @@ namespace ConsoleGame.RayTracing
             long frame = Interlocked.Increment(ref frameCounter);
 
             int frameIdx = unchecked((int)(frame & 0x7fffffff));
-            float jitterX = Halton(frameIdx + 1, 2) - 0.5f;
-            float jitterY = Halton(frameIdx + 1, 3) - 0.5f;
+            float jitterRotX = RaytraceSampler.Frac((frameIdx + 1) * 0.61803398875f);
+            float jitterRotY = RaytraceSampler.Frac((frameIdx + 1) * 0.38196601125f);
 
-            Chexel[,] target = frameBuffer;
+            var target = frameBuffer;
 
             threadpool.For(0, procCount, worker =>
             {
@@ -148,41 +151,30 @@ namespace ConsoleGame.RayTracing
                 {
                     for (int px = 0; px < hiW; px++)
                     {
-                        rays[px, py] = MakeJitteredRay(camPosSnapshot, yawSnapshot, pitchSnapshot, fovDeg, aspect, px, py, hiW, hiH, jitterX, jitterY);
+                        rays[px, py] = MakeJitteredRay(camPosSnapshot, yawSnapshot, pitchSnapshot, fovDeg, aspect, px, py, hiW, hiH, jitterRotX, jitterRotY, frameIdx);
                     }
                 }
             });
 
-            if (currentHdr == null || currentHdr.Length != hiH * hiW)
+            if (currentHdr == null || currentHdr.Width != hiW || currentHdr.Height != hiH)
             {
-                currentHdr = new Vec3[hiW, hiH];
+                currentHdr = new Fast2D<Vec3>(hiW, hiH);
             }
 
             pixelPool.For2D(hiW, hiH, (px, py, threadId) =>
             {
-                Rng rng = new Rng(PerFrameSeed(px, py, frame, 0, 0));
+                RaytraceSampler.Rng rng = new RaytraceSampler.Rng(RaytraceSampler.PerFrameSeed(px, py, frame, 0, 0, SeedSalt));
                 float uCenter = (px + 0.5f) / hiW;
                 float vCenter = (py + 0.5f) / hiH;
 
-                HitRecord temp = default;
-                bool isSky = !scene.Hit(rays[px, py], 0.001f, float.MaxValue, ref temp, uCenter, vCenter);
+                bool isSky;
+                Vec3 cur = TraceFull(scene, rays[px, py], 0, 0, ref rng, uCenter, vCenter, out isSky);
                 skyMask[px, py] = isSky;
-
-                Vec3 cur;
-                if (isSky)
-                {
-                    float tbg = 0.5f * (rays[px, py].Dir.Y + 1.0f);
-                    cur = Lerp(scene.BackgroundBottom, scene.BackgroundTop, tbg);
-                }
-                else
-                {
-                    cur = TraceFull(scene, rays[px, py], 0, 0, ref rng, uCenter, vCenter);
-                }
 
                 currentHdr[px, py] = cur;
             });
 
-            Vec3[,] blendedHdr = taa.BlendIntoHistory(currentHdr, resetHistory);
+            Fast2D<Vec3> blendedHdr = taa.BlendIntoHistory(currentHdr, resetHistory);
 
             int step = Math.Max(2, ss * 2);
             toneMapper.UpdateExposure(blendedHdr, skyMask, step);
@@ -219,18 +211,6 @@ namespace ConsoleGame.RayTracing
                         Vec3 botSDR = toneMapper.MapPixel(botAvg);
 
                         target[cx, cy] = new Chexel('▀', topSDR, botSDR);
-                    }
-                }
-            });
-
-            threadpool.For(0, procCount, worker =>
-            {
-                int yStart = worker * fbH / procCount;
-                int yEnd = (worker + 1) * fbH / procCount;
-                for (int cy = yStart; cy < yEnd; cy++)
-                {
-                    for (int cx = 0; cx < fbW; cx++)
-                    {
                         fb.SetChexel(cx, cy, target[cx, cy]);
                     }
                 }
@@ -251,10 +231,15 @@ namespace ConsoleGame.RayTracing
             return new Vec3(MathF.Sin(yaw) * cp, MathF.Sin(pitch), -MathF.Cos(yaw) * cp);
         }
 
-        private static Ray MakeJitteredRay(Vec3 camPos, float yaw, float pitch, float fovDeg, float aspect, int px, int py, int W, int H, float jitterX, float jitterY)
+        private static Ray MakeJitteredRay(Vec3 camPos, float yaw, float pitch, float fovDeg, float aspect, int px, int py, int W, int H, float jitterRotX, float jitterRotY, int frameIdx)
         {
-            float u = ((px + 0.5f + jitterX) / W) * 2.0f - 1.0f;
-            float v = 1.0f - ((py + 0.5f + jitterY) / H) * 2.0f;
+            float jxBase = RaytraceSampler.BlueNoiseSample(px, py, frameIdx, 0);
+            float jyBase = RaytraceSampler.BlueNoiseSample(px, py, frameIdx, 1);
+            float jx = RaytraceSampler.Frac(jxBase + jitterRotX) - 0.5f;
+            float jy = RaytraceSampler.Frac(jyBase + jitterRotY) - 0.5f;
+
+            float u = ((px + 0.5f + jx) / W) * 2.0f - 1.0f;
+            float v = 1.0f - ((py + 0.5f + jy) / H) * 2.0f;
             float fovRad = fovDeg * (MathF.PI / 180.0f);
             float halfH = MathF.Tan(0.5f * fovRad);
             float halfW = halfH * aspect;
@@ -266,125 +251,174 @@ namespace ConsoleGame.RayTracing
             return new Ray(camPos, dir);
         }
 
-        private static float Halton(int index, int b)
+        private struct PathWorkItem
         {
-            float f = 1.0f;
-            float r = 0.0f;
-            while (index > 0)
-            {
-                f /= b;
-                r += f * (index % b);
-                index /= b;
-            }
-            return r;
+            public Ray Ray;
+            public Vec3 Throughput;
+            public int MirrorDepth;
+            public int DiffuseDepth;
+            public bool IsPrimary;
         }
 
-        private static Vec3 TraceFull(Scene scene, Ray r, int mirrorDepth, int diffuseDepth, ref Rng rng, float screenU, float screenV)
+        private static Vec3 TraceFull(Scene scene, Ray r, int mirrorDepthIgnored, int diffuseDepthIgnored, ref RaytraceSampler.Rng rng, float screenU, float screenV, out bool isSky)
         {
+            const int MaxStack = 16;
+            PathWorkItem[] stack = new PathWorkItem[MaxStack];
+            int sp = 0;
+            stack[sp++] = new PathWorkItem { Ray = r, Throughput = new Vec3(1, 1, 1), MirrorDepth = 0, DiffuseDepth = 0, IsPrimary = true };
+            Vec3 radiance = Vec3.Zero;
+            bool primaryHitSomething = false;
+            isSky = false;
             HitRecord rec = default;
-            if (!scene.Hit(r, 0.001f, float.MaxValue, ref rec, screenU, screenV))
+            float sigmaRad = DiffuseSigmaDeg * (MathF.PI / 180.0f);
+            while (sp > 0)
             {
-                float tbg = 0.5f * (r.Dir.Y + 1.0f);
-                return Lerp(scene.BackgroundBottom, scene.BackgroundTop, tbg);
-            }
-            Vec3 color = rec.Mat.Emission;
-
-            Vec3 baseAlbedo = SampleAlbedo(rec.Mat, rec.P, rec.N, rec.U, rec.V);
-
-            if (rec.Mat.Transparency > 0.0)
-            {
-                if (mirrorDepth >= MaxMirrorBounces) return color;
-                Vec3 n = rec.N;
-                Vec3 wo = r.Dir;
-                bool frontFace = n.Dot(wo) < 0.0;
-                Vec3 nl = frontFace ? n : n * -1.0f;
-                float etaI = frontFace ? 1.0f : (float)rec.Mat.IndexOfRefraction;
-                float etaT = frontFace ? (float)rec.Mat.IndexOfRefraction : 1.0f;
-                float eta = etaI / etaT;
-
-                Vec3 reflDir = Reflect(wo, nl).Normalized();
-                bool hasRefract = Refract(wo, nl, eta, out Vec3 refrDir);
-
-                float cosTheta = MathF.Abs(nl.Dot(wo * -1.0f));
-                float fresnel = FresnelSchlick(cosTheta, etaI, etaT);
-                float R = fresnel;
-                float Tr = (float)Math.Clamp(rec.Mat.Transparency, 0.0, 1.0);
-                float T = hasRefract ? (1.0f - R) * Tr : 0.0f;
-
-                R = Math.Clamp(R + (float)rec.Mat.Reflectivity * (1.0f - R), 0.0f, 1.0f);
-
-                Vec3 accum = Vec3.Zero;
-
-                if (R > 0.0f)
+                sp--;
+                PathWorkItem item = stack[sp];
+                Ray currentRay = item.Ray;
+                Vec3 beta = item.Throughput;
+                int mirrorDepth = item.MirrorDepth;
+                int diffuseDepth = item.DiffuseDepth;
+                for (; ; )
                 {
-                    Ray reflRay = new Ray(rec.P + nl * Eps, reflDir);
-                    Vec3 rc = TraceFull(scene, reflRay, mirrorDepth + 1, diffuseDepth, ref rng, screenU, screenV);
-                    accum += new Vec3(rc.X * baseAlbedo.X, rc.Y * baseAlbedo.Y, rc.Z * baseAlbedo.Z) * R;
+                    rec = default;
+                    if (!scene.Hit(currentRay, 0.001f, float.MaxValue, ref rec, screenU, screenV))
+                    {
+                        float tbg = 0.5f * (currentRay.Dir.Y + 1.0f);
+                        Vec3 sky = Lerp(scene.BackgroundBottom, scene.BackgroundTop, tbg);
+                        if (item.IsPrimary && !primaryHitSomething)
+                        {
+                            isSky = true;
+                        }
+                        radiance += new Vec3(beta.X * sky.X, beta.Y * sky.Y, beta.Z * sky.Z);
+                        break;
+                    }
+                    if (item.IsPrimary)
+                    {
+                        primaryHitSomething = true;
+                        isSky = false;
+                        item.IsPrimary = false;
+                    }
+                    if (rec.Mat.Emission.X != 0.0 || rec.Mat.Emission.Y != 0.0 || rec.Mat.Emission.Z != 0.0)
+                    {
+                        Vec3 e = rec.Mat.Emission;
+                        radiance += new Vec3(beta.X * e.X, beta.Y * e.Y, beta.Z * e.Z);
+                    }
+                    Vec3 baseAlbedo = SampleAlbedo(rec.Mat, rec.P, rec.N, rec.U, rec.V);
+                    if (rec.Mat.Transparency > 0.0)
+                    {
+                        if (mirrorDepth >= MaxMirrorBounces)
+                        {
+                            break;
+                        }
+                        Vec3 n = rec.N;
+                        Vec3 wo = currentRay.Dir;
+                        bool frontFace = n.Dot(wo) < 0.0;
+                        Vec3 nl = frontFace ? n : n * -1.0f;
+                        float etaI = frontFace ? 1.0f : (float)rec.Mat.IndexOfRefraction;
+                        float etaT = frontFace ? (float)rec.Mat.IndexOfRefraction : 1.0f;
+                        float eta = etaI / etaT;
+                        Vec3 reflDir = Reflect(wo, nl).Normalized();
+                        bool hasRefract = Refract(wo, nl, eta, out Vec3 refrDir);
+                        float cosTheta = MathF.Abs(nl.Dot(wo * -1.0f));
+                        float fresnel = FresnelSchlick(cosTheta, etaI, etaT);
+                        float R = fresnel;
+                        float Tr = (float)Math.Clamp(rec.Mat.Transparency, 0.0, 1.0);
+                        float T = hasRefract ? (1.0f - R) * Tr : 0.0f;
+                        R = Math.Clamp(R + (float)rec.Mat.Reflectivity * (1.0f - R), 0.0f, 1.0f);
+                        int pushed = 0;
+                        if (R > 0.0f)
+                        {
+                            if (sp < MaxStack)
+                            {
+                                PathWorkItem refl = new PathWorkItem();
+                                refl.Ray = new Ray(rec.P + nl * Eps, reflDir);
+                                refl.Throughput = new Vec3(beta.X * baseAlbedo.X * R, beta.Y * baseAlbedo.Y * R, beta.Z * baseAlbedo.Z * R);
+                                refl.MirrorDepth = mirrorDepth + 1;
+                                refl.DiffuseDepth = diffuseDepth;
+                                refl.IsPrimary = false;
+                                stack[sp++] = refl;
+                                pushed++;
+                            }
+                        }
+                        if (T > 0.0f)
+                        {
+                            if (sp < MaxStack)
+                            {
+                                PathWorkItem refr = new PathWorkItem();
+                                refr.Ray = new Ray(rec.P - nl * Eps, refrDir.Normalized());
+                                Vec3 transTint = rec.Mat.TransmissionColor;
+                                refr.Throughput = new Vec3(beta.X * transTint.X * T, beta.Y * transTint.Y * T, beta.Z * transTint.Z * T);
+                                refr.MirrorDepth = mirrorDepth + 1;
+                                refr.DiffuseDepth = diffuseDepth;
+                                refr.IsPrimary = false;
+                                stack[sp++] = refr;
+                                pushed++;
+                            }
+                        }
+                        break;
+                    }
+                    if ((float)rec.Mat.Reflectivity >= MirrorThreshold)
+                    {
+                        if (mirrorDepth >= MaxMirrorBounces)
+                        {
+                            break;
+                        }
+                        Vec3 reflDir = Reflect(currentRay.Dir, rec.N).Normalized();
+                        currentRay = new Ray(rec.P + rec.N * Eps, reflDir);
+                        beta = new Vec3(beta.X * baseAlbedo.X, beta.Y * baseAlbedo.Y, beta.Z * baseAlbedo.Z);
+                        mirrorDepth++;
+                        continue;
+                    }
+                    if (scene.Ambient.Intensity > 0.0f)
+                    {
+                        Vec3 a = new Vec3(scene.Ambient.Color.X * scene.Ambient.Intensity, scene.Ambient.Color.Y * scene.Ambient.Intensity, scene.Ambient.Color.Z * scene.Ambient.Intensity);
+                        Vec3 amb = new Vec3(a.X * baseAlbedo.X, a.Y * baseAlbedo.Y, a.Z * baseAlbedo.Z);
+                        radiance += new Vec3(beta.X * amb.X, beta.Y * amb.Y, beta.Z * amb.Z);
+                    }
+                    Vec3 woView = (currentRay.Dir * -1.0f).Normalized();
+                    for (int i = 0; i < scene.Lights.Count; i++)
+                    {
+                        PointLight light = scene.Lights[i];
+                        Vec3 toL = light.Position - rec.P;
+                        float dist2 = toL.Dot(toL);
+                        float dist = MathF.Sqrt(dist2);
+                        Vec3 ldir = toL / dist;
+                        float nDotL = MathF.Max(0.0f, rec.N.Dot(ldir));
+                        if (nDotL <= 0.0f)
+                        {
+                            continue;
+                        }
+                        Ray shadow = new Ray(rec.P + rec.N * Eps, ldir);
+                        Vec3 transToLight = ComputeTransmittanceToLight(scene, shadow, dist - Eps, screenU, screenV);
+                        if (transToLight.X <= 1e-6f && transToLight.Y <= 1e-6f && transToLight.Z <= 1e-6f)
+                        {
+                            continue;
+                        }
+                        float atten = light.Intensity / dist2;
+                        Vec3 fDiffuse = OrenNayarBRDF(baseAlbedo, rec.N, woView, ldir, sigmaRad);
+                        Vec3 bsdf = fDiffuse;
+                        Vec3 Li = light.Color * atten;
+                        Vec3 contrib = (bsdf * (nDotL)) * Li;
+                        contrib = new Vec3(contrib.X * transToLight.X, contrib.Y * transToLight.Y, contrib.Z * transToLight.Z);
+                        radiance += new Vec3(beta.X * contrib.X, beta.Y * contrib.Y, beta.Z * contrib.Z);
+                    }
+                    if (diffuseDepth < DiffuseBounces)
+                    {
+                        Vec3 bounceDir = RaytraceSampler.CosineSampleHemisphere(rec.N, ref rng);
+                        float cosNI = MathF.Max(0.0f, rec.N.Dot(bounceDir));
+                        Vec3 fON = OrenNayarBRDF(baseAlbedo, rec.N, woView, bounceDir, sigmaRad);
+                        float factor = Pi;
+                        Vec3 mult = new Vec3(fON.X * factor, fON.Y * factor, fON.Z * factor);
+                        currentRay = new Ray(rec.P + rec.N * Eps, bounceDir);
+                        beta = new Vec3(beta.X * mult.X, beta.Y * mult.Y, beta.Z * mult.Z);
+                        diffuseDepth++;
+                        continue;
+                    }
+                    break;
                 }
-
-                if (T > 0.0f)
-                {
-                    Ray refrRay = new Ray(rec.P - nl * Eps, refrDir.Normalized());
-                    Vec3 tc = TraceFull(scene, refrRay, mirrorDepth + 1, diffuseDepth, ref rng, screenU, screenV);
-                    Vec3 transTint = rec.Mat.TransmissionColor;
-                    accum += tc * transTint * T;
-                }
-
-                color += accum;
-                return color;
             }
-
-            if ((float)rec.Mat.Reflectivity >= MirrorThreshold)
-            {
-                if (mirrorDepth >= MaxMirrorBounces) return color;
-                Vec3 reflDir = Reflect(r.Dir, rec.N).Normalized();
-                Ray reflRay = new Ray(rec.P + rec.N * Eps, reflDir);
-                Vec3 reflCol = TraceFull(scene, reflRay, mirrorDepth + 1, diffuseDepth, ref rng, screenU, screenV);
-                color += new Vec3(reflCol.X * baseAlbedo.X, reflCol.Y * baseAlbedo.Y, reflCol.Z * baseAlbedo.Z);
-                return color;
-            }
-
-            if (scene.Ambient.Intensity > 0.0f)
-            {
-                Vec3 a = new Vec3(scene.Ambient.Color.X * scene.Ambient.Intensity, scene.Ambient.Color.Y * scene.Ambient.Intensity, scene.Ambient.Color.Z * scene.Ambient.Intensity);
-                color += new Vec3(a.X * baseAlbedo.X, a.Y * baseAlbedo.Y, a.Z * baseAlbedo.Z);
-            }
-
-            for (int i = 0; i < scene.Lights.Count; i++)
-            {
-                PointLight light = scene.Lights[i];
-                Vec3 toL = light.Position - rec.P;
-                float dist2 = toL.Dot(toL);
-                float dist = MathF.Sqrt(dist2);
-                Vec3 ldir = toL / dist;
-                float nDotL = MathF.Max(0.0f, rec.N.Dot(ldir));
-                if (nDotL <= 0.0) continue;
-
-                Ray shadow = new Ray(rec.P + rec.N * Eps, ldir);
-
-                Vec3 transToLight = ComputeTransmittanceToLight(scene, shadow, dist - Eps, screenU, screenV);
-                if (transToLight.X <= 1e-6 && transToLight.Y <= 1e-6 && transToLight.Z <= 1e-6) continue;
-
-                float atten = light.Intensity / dist2;
-                Vec3 lambert = baseAlbedo * (nDotL * atten) * light.Color;
-                color += lambert * transToLight;
-            }
-
-            if (diffuseDepth < DiffuseBounces)
-            {
-                Vec3 indirect = Vec3.Zero;
-                for (int s = 0; s < IndirectSamples; s++)
-                {
-                    Vec3 bounceDir = CosineSampleHemisphere(rec.N, ref rng);
-                    Ray bounce = new Ray(rec.P + rec.N * Eps, bounceDir);
-                    Vec3 Li = TraceFull(scene, bounce, mirrorDepth, diffuseDepth + 1, ref rng, screenU, screenV);
-                    indirect += new Vec3(Li.X * baseAlbedo.X, Li.Y * baseAlbedo.Y, Li.Z * baseAlbedo.Z);
-                }
-                float invSpp = 1.0f / IndirectSamples;
-                color += new Vec3(indirect.X * invSpp, indirect.Y * invSpp, indirect.Z * invSpp);
-            }
-
-            return color;
+            return radiance;
         }
 
         private static Vec3 SampleAlbedo(Material mat, Vec3 pos, Vec3 normal, float u, float v)
@@ -422,34 +456,38 @@ namespace ConsoleGame.RayTracing
 
         private static Vec3 ComputeTransmittanceToLight(Scene scene, Ray shadow, float maxDist, float screenU, float screenV)
         {
-            Vec3 trans = new Vec3(1.0, 1.0, 1.0);
-            float tTraveled = 0.0f;
+            float transR = 1.0f;
+            float transG = 1.0f;
+            float transB = 1.0f;
             HitRecord block = default;
             float tmin = 0.0f + Eps;
             int counter = 0;
+            const float cutoff = 1e-6f;
             while (counter < MaxRefractions && scene.Hit(shadow, tmin, maxDist, ref block, screenU, screenV))
             {
                 counter++;
-                Vec3 hitVec = block.P - shadow.Origin;
-                float tHit = MathF.Sqrt((float)hitVec.Dot(hitVec));
-                if (tHit > maxDist) break;
-
                 double tr = block.Mat.Transparency;
                 if (tr <= 0.0)
                 {
-                    return new Vec3(0.0, 0.0, 0.0);
+                    return Vec3.Zero;
                 }
-
                 Vec3 tint = block.Mat.TransmissionColor;
-                trans = new Vec3(trans.X * tint.X * (float)tr, trans.Y * tint.Y * (float)tr, trans.Z * tint.Z * (float)tr);
-
-                if (trans.X <= 1e-6 && trans.Y <= 1e-6 && trans.Z <= 1e-6) return new Vec3(0.0, 0.0, 0.0);
-
-                tTraveled = tHit + Eps;
-                tmin = tTraveled;
-                shadow = new Ray(shadow.Origin, shadow.Dir);
+                float trf = (float)tr;
+                transR *= tint.X * trf;
+                transG *= tint.Y * trf;
+                transB *= tint.Z * trf;
+                if (transR <= cutoff && transG <= cutoff && transB <= cutoff)
+                {
+                    return Vec3.Zero;
+                }
+                float tHit = block.T;
+                if (tHit > maxDist)
+                {
+                    break;
+                }
+                tmin = tHit + Eps;
             }
-            return trans;
+            return new Vec3(transR, transG, transB);
         }
 
         private static Vec3 Reflect(Vec3 v, Vec3 n)
@@ -462,54 +500,27 @@ namespace ConsoleGame.RayTracing
             return a * (1.0f - t) + b * t;
         }
 
-        private static ulong PerFrameSeed(int x, int y, long frame, int jx, int jy)
+        private static Vec3 OrenNayarBRDF(Vec3 albedo, Vec3 n, Vec3 wo, Vec3 wi, float sigmaRad)
         {
-            unchecked
+            float cosThetaI = MathF.Max(0.0f, (float)n.Dot(wi));
+            float cosThetaO = MathF.Max(0.0f, (float)n.Dot(wo));
+            if (cosThetaI <= 0.0f || cosThetaO <= 0.0f)
             {
-                ulong h = 1469598103934665603UL;
-                h ^= (ulong)(x) * 0x9E3779B97F4A7C15UL; h = SplitMix64(h);
-                h ^= (ulong)(y) * 0xC2B2AE3D27D4EB4FUL; h = SplitMix64(h);
-                h ^= (ulong)frame * 0x165667B19E3779F9UL; h = SplitMix64(h);
-                h ^= ((ulong)(byte)jx << 8) ^ (ulong)(byte)jy; h = SplitMix64(h);
-                h ^= SeedSalt; h = SplitMix64(h);
-                return h;
+                return Vec3.Zero;
             }
-        }
-
-        private static ulong SplitMix64(ulong z)
-        {
-            unchecked
-            {
-                z += 0x9E3779B97F4A7C15UL;
-                z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL;
-                z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL;
-                return z ^ (z >> 31);
-            }
-        }
-
-        private static Vec3 CosineSampleHemisphere(Vec3 n, ref Rng rng)
-        {
-            float u1 = rng.NextUnit();
-            float u2 = rng.NextUnit();
-            float r = MathF.Sqrt(u1);
-            float theta = 2.0f * MathF.PI * u2;
-            float x = r * MathF.Cos(theta);
-            float y = r * MathF.Sin(theta);
-            float z = MathF.Sqrt(MathF.Max(0.0f, 1.0f - u1));
-            Vec3 w = n;
-            Vec3 a = MathF.Abs(w.X) > 0.1 ? new Vec3(0.0, 1.0, 0.0) : new Vec3(1.0, 0.0, 0.0);
-            Vec3 v = w.Cross(a).Normalized();
-            Vec3 u = v.Cross(w);
-            Vec3 dir = (u * x + v * y + w * z).Normalized();
-            return dir;
-        }
-
-        private static Vec3 ClampLuminance(Vec3 c, float maxY)
-        {
-            float y = 0.2126f * c.X + 0.7152f * c.Y + 0.0722f * c.Z;
-            if (y <= maxY) return c;
-            float s = maxY / MathF.Max(y, 1e-6f);
-            return new Vec3(c.X * s, c.Y * s, c.Z * s);
+            float sinThetaI = MathF.Sqrt(MathF.Max(0.0f, 1.0f - cosThetaI * cosThetaI));
+            float sinThetaO = MathF.Sqrt(MathF.Max(0.0f, 1.0f - cosThetaO * cosThetaO));
+            Vec3 projI = (wi - n * cosThetaI).Normalized();
+            Vec3 projO = (wo - n * cosThetaO).Normalized();
+            float cosPhiDiff = MathF.Max(0.0f, (float)projI.Dot(projO));
+            float sigma2 = sigmaRad * sigmaRad;
+            float A = 1.0f - (sigma2 / (2.0f * (sigma2 + 0.33f)));
+            float B = 0.45f * sigma2 / (sigma2 + 0.09f);
+            float sinAlpha = MathF.Max(sinThetaI, sinThetaO);
+            float tanBeta = MathF.Min(sinThetaI / MathF.Max(1e-6f, cosThetaI), sinThetaO / MathF.Max(1e-6f, cosThetaO));
+            float on = (A + B * cosPhiDiff * sinAlpha * tanBeta);
+            Vec3 f = albedo * (on * InvPi);
+            return f.Saturate();
         }
     }
 }

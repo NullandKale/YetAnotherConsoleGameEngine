@@ -58,10 +58,10 @@ namespace ConsoleGame.RayTracing.Scenes
 
             Console.WriteLine("[Museum] Adding mesh gallery (uniform scale=1)...");
             {
-                TryAddMeshAutoGround(s, @"assets\cow.obj", gold, 1.0f, meshGalleryAnchor + new Vec3(-2.6f, 0.0f, -0.4f));
-                TryAddMeshAutoGround(s, @"assets\stanford-bunny.obj", green, 1.0f, meshGalleryAnchor + new Vec3(0.0f, 0.0f, 0.0f));
-                TryAddMeshAutoGround(s, @"assets\teapot.obj", red, 1.0f, meshGalleryAnchor + new Vec3(2.6f, 0.0f, 0.4f));
-                TryAddMeshAutoGround(s, @"assets\xyzrgb_dragon.obj", mirror, 1.0f, meshGalleryAnchor + new Vec3(5.2f, 0.0f, -0.8f));
+                TryAddMeshAutoGround(s, @"assets\cow.obj", gold, 3.0f, meshGalleryAnchor + new Vec3(-2.6f, 1.0f, -0.4f));
+                TryAddMeshAutoGround(s, @"assets\stanford-bunny.obj", green, 3.0f, meshGalleryAnchor + new Vec3(0.0f, 1.0f, 0.0f));
+                TryAddMeshAutoGround(s, @"assets\teapot.obj", red, 2.0f, meshGalleryAnchor + new Vec3(2.6f, 1.0f, 0.4f));
+                TryAddMeshAutoGround(s, @"assets\xyzrgb_dragon.obj", mirror, 8.0f, meshGalleryAnchor + new Vec3(5.2f, 2.0f, -0.8f));
                 s.Objects.Add(new Disk(meshGalleryAnchor + new Vec3(2.6f, 0.01f, 0.4f), new Vec3(0.0f, 1.0f, 0.0f), 0.9f, Solid(new Vec3(0.85, 0.85, 0.1)), 0.0f, 0.0f));
             }
 
@@ -314,7 +314,7 @@ namespace ConsoleGame.RayTracing.Scenes
             }
             float yTranslate = targetPos.Y + 0.5f + 0.01f;
             Vec3 translate = new Vec3(targetPos.X, yTranslate, targetPos.Z);
-            s.Objects.Add(Mesh.FromObj(objPath, mat, scale: 1.0f, translate: translate));
+            s.Objects.Add(MeshLoader.FromObj(objPath, mat, scale: scale, translate: translate));
             sw.Stop();
             Console.WriteLine("[Museum] Mesh added (scale=1): {0} ({1} ms)", objPath, sw.ElapsedMilliseconds);
         }
