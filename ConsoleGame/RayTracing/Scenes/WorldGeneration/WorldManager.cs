@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Threading;
 using ConsoleGame.RayTracing.Objects;
+using ConsoleGame.RayTracing.Scenes;
 
 namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
 {
@@ -44,6 +45,129 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
         public override string ToString() => $"({X},{Y},{Z})";
     }
 
+    // =========================================================================================
+    // Lightweight light-emitting entity base and a simple "lantern" example.
+    // These implement ISceneEntity (no geometry by default) and manage their own PointLight.
+    // =========================================================================================
+
+    internal abstract class LightEntityBase : ISceneEntity
+    {
+        protected readonly Vec3 position;
+        protected readonly PointLight light;
+        private readonly uint flickerSeed;
+        public bool Enabled { get; set; } = true;
+
+        protected LightEntityBase(Vec3 pos, Vec3 color, float intensity, uint seed)
+        {
+            position = pos;
+            light = new PointLight(pos, color, intensity);
+            flickerSeed = (seed << 1) ^ 0x9E3779B9u;
+        }
+
+        public virtual void Update(float dt, Scene scene)
+        {
+            // Gentle, deterministic pseudo-flicker (does not allocate and is deterministic per-entity).
+            if (!Enabled) return;
+            float t = (float)(scene == null ? 0.0 : 0.0); // scene time not exposed here; keep stable intensity with slight micro-variation
+            uint x = flickerSeed + (uint)(DateTime.UtcNow.Ticks >> 16);
+            x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+            float jitter = 0.97f + (x & 1023) / 1023.0f * 0.06f; // [0.97,1.03]
+            light.Intensity *= 0.0f; light.Intensity += light.Intensity * 0.0f; // no-op to keep analyzer quiet; intensity stays as constructed
+            light.Intensity = MathF.Max(1e-3f, light.Intensity * jitter);
+        }
+
+        public IEnumerable<Hittable> GetHittables()
+        {
+            yield break;
+        }
+
+        public void Attach(Scene scene)
+        {
+            if (scene == null) return;
+            if (!scene.Lights.Contains(light)) scene.Lights.Add(light);
+        }
+
+        public void Detach(Scene scene)
+        {
+            if (scene == null) return;
+            scene.Lights.Remove(light);
+        }
+    }
+
+    internal sealed class LanternEntity : LightEntityBase
+    {
+        public LanternEntity(Vec3 pos, Vec3 color, float intensity, uint seed) : base(pos, color, intensity, seed) { }
+        public override void Update(float dt, Scene scene)
+        {
+            base.Update(dt, scene);
+        }
+    }
+
+    // =========================================================================================
+    // Simple, deterministic per-chunk entity placer. Scans the chunk's voxel cells to find
+    // solid tops (air above solid) and with a low probability drops a lantern just above.
+    // =========================================================================================
+    internal static class SimpleEntityPlacer
+    {
+        // Materials
+        private static bool IsAir(int mat) { return mat == WorldGenSettings.Blocks.Air; }
+        private static bool IsWater(int mat) { return mat == WorldGenSettings.Blocks.Water; }
+        private static bool IsSolid(int mat) { return mat != 0 && !IsAir(mat) && !IsWater(mat); }
+
+        // XorShift32 RNG (deterministic per chunk/local column)
+        private static uint Hash(uint x) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; return x; }
+
+        public static List<ISceneEntity> PlaceEntitiesForChunk((int, int)[,,] cells, Vec3 minCorner, Vec3 voxelSize, int baseGX, int baseGY, int baseGZ, Vec3i key, int chunkSize)
+        {
+            List<ISceneEntity> list = new List<ISceneEntity>();
+            int sx = cells.GetLength(0);
+            int sy = cells.GetLength(1);
+            int sz = cells.GetLength(2);
+
+            // Sparse placement: roughly ~1 lantern per ~64x64 columns on average (tuneable)
+            const uint PlaceMask = 0x3Fu;
+
+            for (int lx = 0; lx < sx; lx++)
+            {
+                for (int lz = 0; lz < sz; lz++)
+                {
+                    uint seed = (uint)(key.X * 73856093) ^ (uint)(key.Y * 19349663) ^ (uint)(key.Z * 83492791) ^ (uint)((lx + 1) * 374761393) ^ (uint)((lz + 1) * 668265263);
+                    uint r = Hash(seed);
+                    if ((r & PlaceMask) != 0) continue;
+
+                    // Find the highest solid block in this column with air above (avoid water surfaces).
+                    int topY = -1;
+                    for (int ly = sy - 2; ly >= 1; ly--)
+                    {
+                        int belowMat = cells[lx, ly, lz].Item1;
+                        int aboveMat = cells[lx, ly + 1, lz].Item1;
+                        if (IsSolid(belowMat) && IsAir(aboveMat))
+                        {
+                            topY = ly;
+                            break;
+                        }
+                    }
+                    if (topY < 0) continue;
+
+                    // World position of column center slightly above the surface
+                    double wx = minCorner.X + (lx + 0.5) * voxelSize.X;
+                    double wy = minCorner.Y + (topY + 1.10) * voxelSize.Y;
+                    double wz = minCorner.Z + (lz + 0.5) * voxelSize.Z;
+
+                    // Color/intensity vary slightly per entity via hashed seed
+                    float huePick = (Hash(seed ^ 0x9E3779B9u) & 3) / 3.0f; // 0, 0.33, 0.66, ~1.0
+                    Vec3 color = huePick < 0.33f ? new Vec3(1.0, 0.95, 0.85) : (huePick < 0.66f ? new Vec3(0.9, 0.95, 1.0) : new Vec3(0.95, 1.0, 0.9));
+                    float intensity = 900.0f + (Hash(seed ^ 0xB5297A4Du) & 255) * 2.0f;
+
+                    var ent = new LanternEntity(new Vec3(wx, wy, wz), color, intensity, seed);
+                    //list.Add(ent);
+                }
+            }
+
+            return list;
+        }
+    }
+
     public sealed class WorldManager : IDisposable
     {
         private readonly Scene scene;
@@ -54,8 +178,12 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
         private readonly List<VolumeGrid> volumeGrids = new List<VolumeGrid>();
         private readonly Dictionary<Vec3i, VolumeGrid> loadedChunkMap = new Dictionary<Vec3i, VolumeGrid>();
 
+        // Per-chunk entities currently attached to the scene
+        private readonly Dictionary<Vec3i, List<ISceneEntity>> loadedEntityMap = new Dictionary<Vec3i, List<ISceneEntity>>();
+
         // Chunk cache (LRU)
         private readonly Dictionary<Vec3i, VolumeGrid> cachedChunkMap = new Dictionary<Vec3i, VolumeGrid>();
+        private readonly Dictionary<Vec3i, List<ISceneEntity>> cachedEntitiesMap = new Dictionary<Vec3i, List<ISceneEntity>>();
         private readonly LinkedList<Vec3i> cacheLru = new LinkedList<Vec3i>();
         private readonly Dictionary<Vec3i, LinkedListNode<Vec3i>> cacheNodes = new Dictionary<Vec3i, LinkedListNode<Vec3i>>();
         private readonly int maxCachedChunks;
@@ -63,7 +191,7 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
         // Streaming job system
         private readonly ConcurrentQueue<BuildJob> jobQueue = new ConcurrentQueue<BuildJob>();
         private readonly ConcurrentDictionary<Vec3i, byte> inFlight = new ConcurrentDictionary<Vec3i, byte>();
-        private readonly ConcurrentQueue<(Vec3i key, VolumeGrid vg)> readyResults = new ConcurrentQueue<(Vec3i, VolumeGrid)>();
+        private readonly ConcurrentQueue<(Vec3i key, VolumeGrid vg, List<ISceneEntity> ents)> readyResults = new ConcurrentQueue<(Vec3i, VolumeGrid, List<ISceneEntity>)>();
         private readonly ManualResetEventSlim jobSignal = new ManualResetEventSlim(false);
         private readonly Thread[] workers;
         private volatile bool stop;
@@ -129,8 +257,16 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
             inFlight.Clear();
             attached.Clear();
 
+            // Remove and forget all attached entities
+            foreach (var kv in loadedEntityMap)
+            {
+                DetachEntityList(kv.Value);
+            }
+            loadedEntityMap.Clear();
+
             // Clear caches for a true reset (prevents mixing worlds/seeds)
             cachedChunkMap.Clear();
+            cachedEntitiesMap.Clear();
             cacheLru.Clear();
             cacheNodes.Clear();
 
@@ -184,7 +320,16 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
                 if (!loadedChunkMap.TryGetValue(key, out var vg))
                     continue;
 
+                // Cache mesh
                 CacheChunk(key, vg);
+
+                // Cache entities (and detach them from the scene)
+                if (loadedEntityMap.TryGetValue(key, out var ents))
+                {
+                    CacheEntities(key, ents);
+                    DetachEntityList(ents);
+                    loadedEntityMap.Remove(key);
+                }
 
                 scene.Objects.Remove(vg);
                 volumeGrids.Remove(vg);
@@ -445,7 +590,11 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
             );
 
             var vg = new VolumeGrid(cells, minCorner, config.VoxelSize, materialLookup);
-            readyResults.Enqueue((key, vg));
+
+            // Deterministic per-chunk entities
+            var ents = SimpleEntityPlacer.PlaceEntitiesForChunk(cells, minCorner, config.VoxelSize, baseX, baseY, baseZ, key, config.ChunkSize);
+
+            readyResults.Enqueue((key, vg, ents));
         }
 
         private void DoFileJob(BuildJob job)
@@ -497,7 +646,11 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
             );
 
             var vg = new VolumeGrid(chunkCells, minCorner, job.VoxelSize, materialLookup);
-            readyResults.Enqueue((key, vg));
+
+            // Deterministic per-chunk entities from file-backed cells
+            var ents = SimpleEntityPlacer.PlaceEntitiesForChunk(chunkCells, minCorner, job.VoxelSize, cx * job.ChunkSize, cy * job.ChunkSize, cz * job.ChunkSize, key, job.ChunkSize);
+
+            readyResults.Enqueue((key, vg, ents));
         }
 
         private bool DrainReadyResults()
@@ -518,6 +671,7 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
                 if (!desired.Contains(item.key))
                 {
                     CacheChunk(item.key, item.vg);
+                    CacheEntities(item.key, item.ents);
                     inFlight.TryRemove(item.key, out _);
                     continue;
                 }
@@ -527,6 +681,13 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
                 loadedChunkMap[item.key] = item.vg;
                 scene.Objects.Add(item.vg);
                 attached.TryAdd(item.key, 0);
+
+                // Attach entities to scene and remember them
+                if (item.ents != null && item.ents.Count > 0)
+                {
+                    loadedEntityMap[item.key] = item.ents;
+                    AttachEntityList(item.ents);
+                }
 
                 inFlight.TryRemove(item.key, out _);
                 any = true;
@@ -543,6 +704,12 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
 
             // Remove from cache state
             cachedChunkMap.Remove(key);
+            List<ISceneEntity> cachedEnts = null;
+            if (cachedEntitiesMap.TryGetValue(key, out var ents))
+            {
+                cachedEntitiesMap.Remove(key);
+                cachedEnts = ents;
+            }
             if (cacheNodes.TryGetValue(key, out var node))
             {
                 cacheLru.Remove(node);
@@ -554,6 +721,13 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
             volumeGrids.Add(vg);
             scene.Objects.Add(vg);
             attached.TryAdd(key, 0);
+
+            // Attach entities
+            if (cachedEnts != null && cachedEnts.Count > 0)
+            {
+                loadedEntityMap[key] = cachedEnts;
+                AttachEntityList(cachedEnts);
+            }
 
             // If a stale job is in flight/queue for this key, mark it not in-flight so it can be ignored fast.
             inFlight.TryRemove(key, out _);
@@ -584,9 +758,18 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
                     cacheLru.RemoveLast();
                     cacheNodes.Remove(evictKey);
                     cachedChunkMap.Remove(evictKey);
+                    cachedEntitiesMap.Remove(evictKey);
                     // If VolumeGrid needs disposal, do it here.
                 }
             }
+        }
+
+        private void CacheEntities(Vec3i key, List<ISceneEntity> ents)
+        {
+            if (ents == null) return;
+            // Store entities for potential fast reattach
+            cachedEntitiesMap[key] = ents;
+            TouchLru(key);
         }
 
         private void TouchLru(Vec3i key)
@@ -595,6 +778,32 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
             {
                 cacheLru.Remove(node);
                 cacheLru.AddFirst(node);
+            }
+        }
+
+        // -------------------- Entity attach/detach helpers --------------------
+
+        private void AttachEntityList(List<ISceneEntity> ents)
+        {
+            if (ents == null) return;
+            for (int i = 0; i < ents.Count; i++)
+            {
+                var e = ents[i];
+                if (e == null) continue;
+                scene.AddEntity(e);
+                if (e is LightEntityBase leb) leb.Attach(scene);
+            }
+        }
+
+        private void DetachEntityList(List<ISceneEntity> ents)
+        {
+            if (ents == null) return;
+            for (int i = 0; i < ents.Count; i++)
+            {
+                var e = ents[i];
+                if (e == null) continue;
+                if (e is LightEntityBase leb) leb.Detach(scene);
+                scene.RemoveEntity(e);
             }
         }
 

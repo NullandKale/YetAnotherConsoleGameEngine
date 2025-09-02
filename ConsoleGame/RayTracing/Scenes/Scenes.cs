@@ -18,10 +18,10 @@ namespace ConsoleGame.RayTracing.Scenes
             Material mirror = new Material(new Vec3(0.98, 0.98, 0.98), 0.0, 0.9, Vec3.Zero);
 
             float r = 0.9f;
-            s.Objects.Add(new Sphere(new Vec3(-1.2, r, -2.2), r, red));     // top-left of square
-            s.Objects.Add(new Sphere(new Vec3(1.2, r, -2.2), r, green));   // top-right
-            s.Objects.Add(new Sphere(new Vec3(-1.2, r, -3.6), r, blue));    // bottom-left
-            s.Objects.Add(new Sphere(new Vec3(1.2, r, -3.6), r, mirror));  // bottom-right (mirror)
+            s.Add(new Sphere(new Vec3(-1.2, r, -2.2), r, red));     // top-left of square
+            s.Add(new Sphere(new Vec3(1.2, r, -2.2), r, green));   // top-right
+            s.Add(new Sphere(new Vec3(-1.2, r, -3.6), r, blue));    // bottom-left
+            s.Add(new Sphere(new Vec3(1.2, r, -3.6), r, mirror));  // bottom-right (mirror)
 
             s.Lights.Add(new PointLight(new Vec3(0.0, 3.2, -2.9), new Vec3(1.0, 1.0, 1.0), 140.0f));
             s.Lights.Add(new PointLight(new Vec3(-2.2, 2.0, -2.4), new Vec3(1.0, 1.0, 1.0), 60.0f));
@@ -29,7 +29,7 @@ namespace ConsoleGame.RayTracing.Scenes
             s.BackgroundTop = new Vec3(0.05, 0.05, 0.05);
             s.BackgroundBottom = new Vec3(0.05, 0.05, 0.05);
 
-            s.RebuildBVH();
+            s.Update(0.0f);
             return s;
         }
 
@@ -115,7 +115,7 @@ namespace ConsoleGame.RayTracing.Scenes
             };
 
             // --- Add the volume to the scene ---
-            s.Objects.Add(new VolumeGrid(cells, minCorner, voxelSize, materialLookup));
+            s.Add(new VolumeGrid(cells, minCorner, voxelSize, materialLookup));
 
             // --- Pedestals and spheres around the volume + a clear sphere at the exact center on the floor ---
             Material pedestalMat = new Material(new Vec3(0.85, 0.85, 0.85), 0.0, 0.0, Vec3.Zero);
@@ -135,18 +135,18 @@ namespace ConsoleGame.RayTracing.Scenes
             Vec3 posF = new Vec3(0.0, 0.0, -0.8);
             Vec3 posB = new Vec3(0.0, 0.0, -3.2);
 
-            s.Objects.Add(new CylinderY(posL, pedR, 0.0f, pedH, true, pedestalMat));
-            s.Objects.Add(new CylinderY(posR, pedR, 0.0f, pedH, true, pedestalMat));
-            s.Objects.Add(new CylinderY(posF, pedR, 0.0f, pedH, true, pedestalMat));
-            s.Objects.Add(new CylinderY(posB, pedR, 0.0f, pedH, true, pedestalMat));
+            s.Add(new CylinderY(posL, pedR, 0.0f, pedH, true, pedestalMat));
+            s.Add(new CylinderY(posR, pedR, 0.0f, pedH, true, pedestalMat));
+            s.Add(new CylinderY(posF, pedR, 0.0f, pedH, true, pedestalMat));
+            s.Add(new CylinderY(posB, pedR, 0.0f, pedH, true, pedestalMat));
 
-            s.Objects.Add(new Sphere(posL + new Vec3(0.0, pedH + sphR, 0.0), sphR, mirror));
-            s.Objects.Add(new Sphere(posR + new Vec3(0.0, pedH + sphR, 0.0), sphR, red));
-            s.Objects.Add(new Sphere(posF + new Vec3(0.0, pedH + sphR, 0.0), sphR, blue));
-            s.Objects.Add(new Sphere(posB + new Vec3(0.0, pedH + sphR, 0.0), sphR, green));
+            s.Add(new Sphere(posL + new Vec3(0.0, pedH + sphR, 0.0), sphR, mirror));
+            s.Add(new Sphere(posR + new Vec3(0.0, pedH + sphR, 0.0), sphR, red));
+            s.Add(new Sphere(posF + new Vec3(0.0, pedH + sphR, 0.0), sphR, blue));
+            s.Add(new Sphere(posB + new Vec3(0.0, pedH + sphR, 0.0), sphR, green));
 
             float clearR = 0.5f;
-            s.Objects.Add(new Sphere(new Vec3(centerXZ.X, centerXZ.Y + 2, centerXZ.Z), clearR, clear));
+            s.Add(new Sphere(new Vec3(centerXZ.X, centerXZ.Y + 2, centerXZ.Z), clearR, clear));
 
             // --- Lighting (two lights to reduce flatness) ---
             s.Lights.Add(new PointLight(new Vec3(0.0, 5.0, -3.0), new Vec3(1.0, 1.0, 1.0), 220.0f));
@@ -156,7 +156,7 @@ namespace ConsoleGame.RayTracing.Scenes
             s.BackgroundTop = new Vec3(0.02, 0.02, 0.02);
             s.BackgroundBottom = new Vec3(0.02, 0.02, 0.02);
 
-            s.RebuildBVH();
+            s.Update(0.0f);
             return s;
         }
 
@@ -172,13 +172,16 @@ namespace ConsoleGame.RayTracing.Scenes
             Material mirror = new Material(new Vec3(0.95, 0.95, 0.95), 0.0, 0.9, Vec3.Zero);
             Material lightMat = new Material(new Vec3(1.0, 1.0, 1.0), 0.0, 0.0, new Vec3(8.0, 8.0, 8.0));
 
-            s.Objects.Add(new Sphere(new Vec3(-1.2, 1.0, 0.0), 1.0f, red));
-            s.Objects.Add(new Sphere(new Vec3(1.2, 1.0, -0.5), 1.0f, blue));
-            s.Objects.Add(new Sphere(new Vec3(0.0, 0.5, -2.5), 0.5f, mirror));
+            Sphere baseA = new Sphere(new Vec3(-1.2, 1.0, 0.0), 1.0f, red);
+            Sphere baseB = new Sphere(new Vec3(1.2, 1.0, -0.5), 1.0f, blue);
+            Sphere baseC = new Sphere(new Vec3(0.0, 0.5, -2.5), 0.5f, mirror);
+            s.Add(baseA);
+            s.Add(baseB);
+            s.Add(baseC);
 
-            s.Objects.Add(new Plane(new Vec3(0.0, 0.0, 0.0), new Vec3(0.0, 1.0, 0.0), Checker(new Vec3(0.8, 0.8, 0.8), new Vec3(0.1, 0.1, 0.1), 0.5f), 0.0f, 0.0f));
+            s.Add(new Plane(new Vec3(0.0, 0.0, 0.0), new Vec3(0.0, 1.0, 0.0), Checker(new Vec3(0.8, 0.8, 0.8), new Vec3(0.1, 0.1, 0.1), 0.5f), 0.0f, 0.0f));
 
-            s.Objects.Add(new Sphere(new Vec3(0.0, 5.0, 2.0), 0.5f, lightMat));
+            s.Add(new Sphere(new Vec3(0.0, 5.0, 2.0), 0.5f, lightMat));
 
             s.Lights.Add(new PointLight(new Vec3(-2.0, 4.0, 3.0), new Vec3(1.0, 0.9, 0.8), 60.0f));
             s.Lights.Add(new PointLight(new Vec3(2.5, 3.5, -1.5), new Vec3(0.8, 0.9, 1.0), 40.0f));
@@ -204,31 +207,33 @@ namespace ConsoleGame.RayTracing.Scenes
                 return new Vec3(r + m, g + m, b + m);
             }
 
-            bool Overlaps(Vec3 c, float r)
+            bool Overlaps(Vec3 c, float r, System.Collections.Generic.List<Sphere> placedList)
             {
-                for (int i = 0; i < s.Objects.Count; i++)
+                for (int i = 0; i < placedList.Count; i++)
                 {
-                    Sphere sph = s.Objects[i] as Sphere;
-                    if (sph != null)
+                    Sphere sph = placedList[i];
+                    Vec3 d = c - sph.Center;
+                    float dist2 = d.Dot(d);
+                    float rr = r + sph.Radius + 0.05f;
+                    if (dist2 < rr * rr)
                     {
-                        Vec3 d = c - sph.Center;
-                        float dist2 = d.Dot(d);
-                        float rr = r + sph.Radius + 0.05f;
-                        if (dist2 < rr * rr)
-                        {
-                            return true;
-                        }
+                        return true;
                     }
                 }
                 return false;
             }
 
+            var placed = new System.Collections.Generic.List<Sphere>();
+            placed.Add(baseA);
+            placed.Add(baseB);
+            placed.Add(baseC);
+
             int count = 100;
             int attemptsPerSphere = 32;
             for (int i = 0; i < count; i++)
             {
-                bool placed = false;
-                for (int attempt = 0; attempt < attemptsPerSphere && !placed; attempt++)
+                bool placedOk = false;
+                for (int attempt = 0; attempt < attemptsPerSphere && !placedOk; attempt++)
                 {
                     float radius = 0.18f + (float)rng.NextDouble() * 0.32f; // [0.18, 0.50]
                     float x = -9.0f + (float)rng.NextDouble() * 9.0f;       // [-3, 3]
@@ -236,7 +241,7 @@ namespace ConsoleGame.RayTracing.Scenes
                     float y = radius;                               // sit on the ground plane (y=0)
                     Vec3 center = new Vec3(x, y, z);
 
-                    if (Overlaps(center, radius))
+                    if (Overlaps(center, radius, placed))
                     {
                         continue;
                     }
@@ -250,12 +255,14 @@ namespace ConsoleGame.RayTracing.Scenes
                     float refl = (float)rng.NextDouble() < 0.2f ? 0.6f : 0.05f; // occasional reflective balls
 
                     Material m = new Material(rgb, spec, refl, Vec3.Zero);
-                    s.Objects.Add(new Sphere(center, radius, m));
-                    placed = true;
+                    Sphere sph = new Sphere(center, radius, m);
+                    s.Add(sph);
+                    placed.Add(sph);
+                    placedOk = true;
                 }
             }
 
-            s.RebuildBVH();
+            s.Update(0.0f);
             return s;
         }
 
@@ -276,28 +283,28 @@ namespace ConsoleGame.RayTracing.Scenes
             float zF = 0.0f;  // open side toward the camera
             float zB = -5.0f; // back wall
 
-            s.Objects.Add(new YZRect(yB, yT, zB, zF, xL, red, 0.0f, 0.0f));    // left wall (red)
-            s.Objects.Add(new YZRect(yB, yT, zB, zF, xR, green, 0.0f, 0.0f));  // right wall (green)
-            s.Objects.Add(new XZRect(xL, xR, zB, zF, yB, white, 0.0f, 0.0f));  // floor
-            s.Objects.Add(new XZRect(xL, xR, zB, zF, yT, white, 0.0f, 0.0f));  // ceiling
-            s.Objects.Add(new XYRect(xL, xR, yB, yT, zB, white, 0.0f, 0.0f));  // back wall
+            s.Add(new YZRect(yB, yT, zB, zF, xL, red, 0.0f, 0.0f));    // left wall (red)
+            s.Add(new YZRect(yB, yT, zB, zF, xR, green, 0.0f, 0.0f));  // right wall (green)
+            s.Add(new XZRect(xL, xR, zB, zF, yB, white, 0.0f, 0.0f));  // floor
+            s.Add(new XZRect(xL, xR, zB, zF, yT, white, 0.0f, 0.0f));  // ceiling
+            s.Add(new XYRect(xL, xR, yB, yT, zB, white, 0.0f, 0.0f));  // back wall
 
             float lx0 = -0.9f;
             float lx1 = 0.9f;
             float lz0 = -3.2f;
             float lz1 = -2.2f;
             float ly = yT - 0.01f;
-            s.Objects.Add(new XZRect(lx0, lx1, lz0, lz1, ly, lightEmit, 0.0f, 0.0f)); // emissive panel (visible light)
+            s.Add(new XZRect(lx0, lx1, lz0, lz1, ly, lightEmit, 0.0f, 0.0f)); // emissive panel (visible light)
 
-            s.Objects.Add(new Box(new Vec3(-2.2, 0.0, -4.0), new Vec3(-0.8, 1.0, -2.8), white, 0.0f, 0.0f));
-            s.Objects.Add(new Box(new Vec3(0.6, 0.0, -3.3), new Vec3(2.0, 1.8, -2.1), white, 0.0f, 0.0f));
+            s.Add(new Box(new Vec3(-2.2, 0.0, -4.0), new Vec3(-0.8, 1.0, -2.8), white, 0.0f, 0.0f));
+            s.Add(new Box(new Vec3(0.6, 0.0, -3.3), new Vec3(2.0, 1.8, -2.1), white, 0.0f, 0.0f));
 
             s.Lights.Add(new PointLight(new Vec3(0.0, 4.6, -2.7), new Vec3(1.0, 1.0, 1.0), 20.0f));
 
             s.BackgroundTop = new Vec3(0.0, 0.0, 0.0);
             s.BackgroundBottom = new Vec3(0.0, 0.0, 0.0);
 
-            s.RebuildBVH();
+            s.Update(0.0f);
             return s;
         }
 
@@ -307,15 +314,15 @@ namespace ConsoleGame.RayTracing.Scenes
             s.Ambient = new AmbientLight(new Vec3(1, 1, 1), 0.01f);
 
             Func<Vec3, Vec3, float, Material> floor = Checker(new Vec3(0.8, 0.8, 0.8), new Vec3(0.15, 0.15, 0.15), 0.6f);
-            s.Objects.Add(new XZRect(-8.0f, 8.0f, -8.0f, 4.0f, 0.0f, floor, 0.1f, 0.0f));
+            s.Add(new XZRect(-8.0f, 8.0f, -8.0f, 4.0f, 0.0f, floor, 0.1f, 0.0f));
 
             Material gold = new Material(new Vec3(1.0, 0.85, 0.57), 0.25, 0.1, Vec3.Zero);
             Material glassy = new Material(new Vec3(0.9, 0.95, 1.0), 0.0, 0.6, Vec3.Zero);
             Material mirror = new Material(new Vec3(0.98, 0.98, 0.98), 0.0, 0.85, Vec3.Zero);
 
-            s.Objects.Add(new Sphere(new Vec3(-1.2, 1.0, -2.0), 1.0f, gold));
-            s.Objects.Add(new Sphere(new Vec3(1.3, 1.0, -2.6), 1.0f, glassy));
-            s.Objects.Add(new Sphere(new Vec3(0.0, 0.5, -4.2), 0.5f, mirror));
+            s.Add(new Sphere(new Vec3(-1.2, 1.0, -2.0), 1.0f, gold));
+            s.Add(new Sphere(new Vec3(1.3, 1.0, -2.6), 1.0f, glassy));
+            s.Add(new Sphere(new Vec3(0.0, 0.5, -4.2), 0.5f, mirror));
 
             s.Lights.Add(new PointLight(new Vec3(-2.5, 3.5, -1.5), new Vec3(1.0, 0.95, 0.9), 90.0f));
             s.Lights.Add(new PointLight(new Vec3(2.0, 2.8, -3.8), new Vec3(0.9, 0.95, 1.0), 70.0f));
@@ -323,7 +330,7 @@ namespace ConsoleGame.RayTracing.Scenes
             s.BackgroundTop = new Vec3(0.55, 0.75, 1.0);
             s.BackgroundBottom = new Vec3(0.95, 0.98, 1.0);
 
-            s.RebuildBVH();
+            s.Update(0.0f);
             return s;
         }
 
@@ -339,12 +346,12 @@ namespace ConsoleGame.RayTracing.Scenes
             texMat.TextureWeight = 1.0;
             texMat.UVScale = 1.0;
 
-            s.Objects.Add(new Box(new Vec3(-0.5, -0.5, -2.5), new Vec3(0.5, 0.5, -1.5), (pos, n, u) => texMat, 0.00f, 0.00f));
+            s.Add(new Box(new Vec3(-0.5, -0.5, -2.5), new Vec3(0.5, 0.5, -1.5), (pos, n, u) => texMat, 0.00f, 0.00f));
 
             s.BackgroundTop = new Vec3(0.0, 0.0, 0.0);
             s.BackgroundBottom = new Vec3(0.0, 0.0, 0.0);
 
-            s.RebuildBVH();
+            s.Update(0.0f);
             return s;
         }
 
@@ -355,15 +362,15 @@ namespace ConsoleGame.RayTracing.Scenes
             s.Ambient = new AmbientLight(new Vec3(1, 1, 1), 0.01f);
 
             Func<Vec3, Vec3, float, Material> floor = Checker(new Vec3(0.75, 0.75, 0.75), new Vec3(0.2, 0.2, 0.2), 0.8f);
-            s.Objects.Add(new Plane(new Vec3(0.0, 0.0, 0.0), new Vec3(0.0, 1.0, 0.0), floor, 0.05f, 0.0f));
+            s.Add(new Plane(new Vec3(0.0, 0.0, 0.0), new Vec3(0.0, 1.0, 0.0), floor, 0.05f, 0.0f));
 
             Material matteBlue = new Material(new Vec3(0.2, 0.35, 0.9), 0.1, 0.0, Vec3.Zero);
             Material matteRed = new Material(new Vec3(0.9, 0.25, 0.25), 0.1, 0.0, Vec3.Zero);
 
-            s.Objects.Add(new CylinderY(new Vec3(-1.2, 0.0, -3.0), 0.6f, 0.0f, 1.6f, true, matteBlue));
-            s.Objects.Add(new Disk(new Vec3(1.6, 0.01, -2.2), new Vec3(0.0, 1.0, 0.0), 0.9f, Solid(new Vec3(0.8, 0.8, 0.1)), 0.0f, 0.0f));
+            s.Add(new CylinderY(new Vec3(-1.2, 0.0, -3.0), 0.6f, 0.0f, 1.6f, true, matteBlue));
+            s.Add(new Disk(new Vec3(1.6, 0.01, -2.2), new Vec3(0.0, 1.0, 0.0), 0.9f, Solid(new Vec3(0.8, 0.8, 0.1)), 0.0f, 0.0f));
 
-            s.Objects.Add(new Triangle(new Vec3(0.2, 0.0, -3.6), new Vec3(1.3, 1.4, -3.0), new Vec3(-0.7, 0.7, -2.8), matteRed));
+            s.Add(new Triangle(new Vec3(0.2, 0.0, -3.6), new Vec3(1.3, 1.4, -3.0), new Vec3(-0.7, 0.7, -2.8), matteRed));
 
             s.Lights.Add(new PointLight(new Vec3(-2.2, 3.2, -2.0), new Vec3(1.0, 0.95, 0.9), 70.0f));
             s.Lights.Add(new PointLight(new Vec3(2.4, 2.2, -4.4), new Vec3(0.9, 0.95, 1.0), 60.0f));
@@ -371,7 +378,7 @@ namespace ConsoleGame.RayTracing.Scenes
             s.BackgroundTop = new Vec3(0.58, 0.78, 1.0);
             s.BackgroundBottom = new Vec3(0.95, 0.98, 1.0);
 
-            s.RebuildBVH();
+            s.Update(0.0f);
             return s;
         }
 
@@ -381,12 +388,12 @@ namespace ConsoleGame.RayTracing.Scenes
             s.Ambient = new AmbientLight(new Vec3(1, 1, 1), 0.01f);
 
             Func<Vec3, Vec3, float, Material> floor = Checker(new Vec3(0.85, 0.85, 0.85), new Vec3(0.15, 0.15, 0.15), 0.7f);
-            s.Objects.Add(new Plane(new Vec3(0.0, 0.0, 0.0), new Vec3(0.0, 1.0, 0.0), floor, 0.05f, 0.0f));
+            s.Add(new Plane(new Vec3(0.0, 0.0, 0.0), new Vec3(0.0, 1.0, 0.0), floor, 0.05f, 0.0f));
 
             Func<Vec3, Vec3, float, Material> white = Solid(new Vec3(0.86, 0.86, 0.86));
-            s.Objects.Add(new Box(new Vec3(-2.2, 0.0, -3.6), new Vec3(-1.0, 1.2, -2.4), white, 0.1f, 0.0f));
-            s.Objects.Add(new Box(new Vec3(-0.6, 0.0, -4.2), new Vec3(0.6, 0.6, -3.0), white, 0.1f, 0.4f));
-            s.Objects.Add(new Box(new Vec3(1.0, 0.0, -3.0), new Vec3(2.4, 2.0, -1.8), white, 0.0f, 0.0f));
+            s.Add(new Box(new Vec3(-2.2, 0.0, -3.6), new Vec3(-1.0, 1.2, -2.4), white, 0.1f, 0.0f));
+            s.Add(new Box(new Vec3(-0.6, 0.0, -4.2), new Vec3(0.6, 0.6, -3.0), white, 0.1f, 0.4f));
+            s.Add(new Box(new Vec3(1.0, 0.0, -3.0), new Vec3(2.4, 2.0, -1.8), white, 0.0f, 0.0f));
 
             s.Lights.Add(new PointLight(new Vec3(-2.0, 3.0, -2.0), new Vec3(1.0, 0.95, 0.9), 70.0f));
             s.Lights.Add(new PointLight(new Vec3(2.0, 2.5, -4.2), new Vec3(0.9, 0.95, 1.0), 50.0f));
@@ -394,7 +401,7 @@ namespace ConsoleGame.RayTracing.Scenes
             s.BackgroundTop = new Vec3(0.6, 0.8, 1.0);
             s.BackgroundBottom = new Vec3(0.95, 0.98, 1.0);
 
-            s.RebuildBVH();
+            s.Update(0.0f);
             return s;
         }
 

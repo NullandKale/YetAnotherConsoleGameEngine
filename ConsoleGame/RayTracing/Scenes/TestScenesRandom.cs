@@ -51,8 +51,8 @@ namespace ConsoleGame.RayTracing.Scenes
 
             Console.WriteLine("[Random] Adding global floor and backdrop...");
             Func<Vec3, Vec3, float, Material> floor = Checker(new Vec3(0.82f, 0.82f, 0.85f), new Vec3(0.12f, 0.12f, 0.12f), 0.9f);
-            s.Objects.Add(new Plane(new Vec3(0.0f, 0.0f, 0.0f), new Vec3(0.0f, 1.0f, 0.0f), floor, 0.01f, 0.00f));
-            s.Objects.Add(new Plane(new Vec3(0.0f, 0.0f, -200.0f), new Vec3(0.0f, 0.0f, 1.0f), Solid(new Vec3(0.02, 0.02, 0.03)), 0.0f, 0.0f));
+            s.Add(new Plane(new Vec3(0.0f, 0.0f, 0.0f), new Vec3(0.0f, 1.0f, 0.0f), floor, 0.01f, 0.00f));
+            s.Add(new Plane(new Vec3(0.0f, 0.0f, -200.0f), new Vec3(0.0f, 0.0f, 1.0f), Solid(new Vec3(0.02, 0.02, 0.03)), 0.0f, 0.0f));
 
             Console.WriteLine("[Random] Preparing base materials...");
             Material matWhite = new Material(new Vec3(0.90, 0.90, 0.92), 0.03, 0.00, Vec3.Zero);
@@ -91,13 +91,19 @@ namespace ConsoleGame.RayTracing.Scenes
             PlaceDiffuseStacksOnRing(s, center, ringRadius, startAngle + stepDeg * 11 + rng.Range(-5f, 5f), rng);
 
             Console.WriteLine("[Random] Adding global keys/fills...");
-            s.Lights.Add(new PointLight(center + new Vec3(0.0f, 18.0f, 14.0f), new Vec3(1.0f, 0.98f, 0.95f), 330.0f));
-            s.Lights.Add(new PointLight(center + new Vec3(-22.0f, 14.0f, -18.0f), new Vec3(0.9f, 0.95f, 1.0f), 240.0f));
-            s.Lights.Add(new PointLight(center + new Vec3(22.0f, 15.0f, -6.0f), new Vec3(0.95f, 1.0f, 0.95f), 220.0f));
+            PointLight g0 = new PointLight(center + new Vec3(0.0f, 18.0f, 14.0f), new Vec3(1.0f, 0.98f, 0.95f), 330.0f);
+            PointLight g1 = new PointLight(center + new Vec3(-22.0f, 14.0f, -18.0f), new Vec3(0.9f, 0.95f, 1.0f), 240.0f);
+            PointLight g2 = new PointLight(center + new Vec3(22.0f, 15.0f, -6.0f), new Vec3(0.95f, 1.0f, 0.95f), 220.0f);
+            s.Lights.Add(g0);
+            s.Lights.Add(g1);
+            s.Lights.Add(g2);
+            s.AddEntity(new PulsingLightEntity(g0, 1.0f, 0.20f, 0.35f));
+            s.AddEntity(new PulsingLightEntity(g1, 1.0f, 0.18f, 0.50f));
+            s.AddEntity(new PulsingLightEntity(g2, 1.0f, 0.15f, 0.65f));
 
             Console.WriteLine("[Random] Rebuilding BVH...");
             Stopwatch bvhSw = Stopwatch.StartNew();
-            s.RebuildBVH();
+            s.Update(0.0f);
             bvhSw.Stop();
 
             totalSw.Stop();
@@ -113,7 +119,7 @@ namespace ConsoleGame.RayTracing.Scenes
 
         private static void AddCenterDragon(Scene s, Vec3 center, Rng rng)
         {
-            s.Objects.Add(new Disk(center + new Vec3(0.0f, 0.015f, 0.0f), new Vec3(0.0f, 1.0f, 0.0f), 6.2f, (p, n, u) => new Material(new Vec3(0.96, 0.96, 0.98), 0.0, 0.88, Vec3.Zero), 0.0f, 0.0f));
+            s.Add(new Disk(center + new Vec3(0.0f, 0.015f, 0.0f), new Vec3(0.0f, 1.0f, 0.0f), 6.2f, (p, n, u) => new Material(new Vec3(0.96, 0.96, 0.98), 0.0, 0.88, Vec3.Zero), 0.0f, 0.0f));
 
             string dragonPath = FindExistingPath(new string[] { @"assets\xyzrgb_dragon.obj", @"assets\dragon.obj" });
             if (dragonPath != null)
@@ -127,10 +133,18 @@ namespace ConsoleGame.RayTracing.Scenes
                 Console.WriteLine("[Random] Central dragon asset not found; skipping centerpiece.");
             }
 
-            s.Lights.Add(new PointLight(center + new Vec3(7.0f, 6.5f, 6.0f), new Vec3(0.98f, 0.96f, 1.06f), 260.0f));
-            s.Lights.Add(new PointLight(center + new Vec3(-8.0f, 6.0f, -6.5f), new Vec3(1.06f, 0.96f, 0.92f), 230.0f));
-            s.Lights.Add(new PointLight(center + new Vec3(0.0f, 3.2f, 0.0f), new Vec3(0.65f, 0.80f, 1.30f), 140.0f));
-            s.Lights.Add(new PointLight(center + new Vec3(0.0f, 3.2f, 2.2f), new Vec3(1.20f, 0.75f, 0.70f), 120.0f));
+            PointLight a = new PointLight(center + new Vec3(7.0f, 6.5f, 6.0f), new Vec3(0.98f, 0.96f, 1.06f), 260.0f);
+            PointLight b = new PointLight(center + new Vec3(-8.0f, 6.0f, -6.5f), new Vec3(1.06f, 0.96f, 0.92f), 230.0f);
+            PointLight c = new PointLight(center + new Vec3(0.0f, 3.2f, 0.0f), new Vec3(0.65f, 0.80f, 1.30f), 140.0f);
+            PointLight d = new PointLight(center + new Vec3(0.0f, 3.2f, 2.2f), new Vec3(1.20f, 0.75f, 0.70f), 120.0f);
+            s.Lights.Add(a);
+            s.Lights.Add(b);
+            s.Lights.Add(c);
+            s.Lights.Add(d);
+            s.AddEntity(new OrbitingLightEntity(a, center, 8.0f, 6.5f, 0.25f, 0.0f));
+            s.AddEntity(new OrbitingLightEntity(b, center, 8.0f, 6.0f, -0.22f, 1.8f));
+            s.AddEntity(new PulsingLightEntity(c, 1.0f, 0.25f, 0.9f));
+            s.AddEntity(new PulsingLightEntity(d, 1.0f, 0.22f, 1.4f));
         }
 
         // ----------------------------------------------------------------------
@@ -238,11 +252,11 @@ namespace ConsoleGame.RayTracing.Scenes
             Func<Vec3, Vec3, float, Material> right = Solid(rightC);
             Func<Vec3, Vec3, float, Material> white = Solid(whiteC);
 
-            s.Objects.Add(new YZRect(yB, yT, zB, zF, xL, left, 0.0f, 0.0f));
-            s.Objects.Add(new YZRect(yB, yT, zB, zF, xR, right, 0.0f, 0.0f));
-            s.Objects.Add(new XZRect(xL, xR, zB, zF, yB, white, 0.0f, 0.0f));
-            s.Objects.Add(new XZRect(xL, xR, zB, zF, yT, white, 0.0f, 0.0f));
-            s.Objects.Add(new XYRect(xL, xR, yB, yT, zB, white, 0.0f, 0.0f));
+            s.Add(new YZRect(yB, yT, zB, zF, xL, left, 0.0f, 0.0f));
+            s.Add(new YZRect(yB, yT, zB, zF, xR, right, 0.0f, 0.0f));
+            s.Add(new XZRect(xL, xR, zB, zF, yB, white, 0.0f, 0.0f));
+            s.Add(new XZRect(xL, xR, zB, zF, yT, white, 0.0f, 0.0f));
+            s.Add(new XYRect(xL, xR, yB, yT, zB, white, 0.0f, 0.0f));
 
             float lx0 = xL + 0.18f * w;
             float lx1 = xR - 0.18f * w;
@@ -252,22 +266,28 @@ namespace ConsoleGame.RayTracing.Scenes
 
             Func<Vec3, Vec3, float, Material> ceilingWarm = (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(3.2, 2.6, 2.3));
             Func<Vec3, Vec3, float, Material> ceilingCool = (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.4, 2.9, 3.2));
-            s.Objects.Add(new XZRect(lx0, lx1, lz0, lz1, ly, rng.Bool(0.5f) ? ceilingWarm : ceilingCool, 0.0f, 0.0f));
+            s.Add(new XZRect(lx0, lx1, lz0, lz1, ly, rng.Bool(0.5f) ? ceilingWarm : ceilingCool, 0.0f, 0.0f));
 
             Vec3 stand0 = new Vec3(a.X - 0.85f, yB, a.Z + 0.25f);
             Vec3 stand1 = new Vec3(a.X + 0.85f, yB, a.Z - 0.25f);
             Material ped = new Material(new Vec3(0.90, 0.90, 0.92), 0.00, 0.00, Vec3.Zero);
 
-            s.Objects.Add(new CylinderY(stand0, 0.26f, 0.0f, 0.9f, true, ped));
-            s.Objects.Add(new Sphere(stand0 + new Vec3(0.0f, 1.25f, 0.0f), 0.34f, new Material(new Vec3(0.98, 0.98, 0.98), 0.0, 0.85, Vec3.Zero)));
-            s.Objects.Add(new CylinderY(stand1, 0.26f, 0.0f, 0.9f, true, ped));
-            s.Objects.Add(new Sphere(stand1 + new Vec3(0.0f, 1.18f, 0.0f), 0.30f, MakeGlass(rng)));
+            s.Add(new CylinderY(stand0, 0.26f, 0.0f, 0.9f, true, ped));
+            Sphere sp0 = new Sphere(stand0 + new Vec3(0.0f, 1.25f, 0.0f), 0.34f, new Material(new Vec3(0.98, 0.98, 0.98), 0.0, 0.85, Vec3.Zero));
+            s.AddEntity(new BobbingSphereEntity(sp0, 0.06f, 1.6f, 0.0f));
+            s.Add(new CylinderY(stand1, 0.26f, 0.0f, 0.9f, true, ped));
+            Sphere sp1 = new Sphere(stand1 + new Vec3(0.0f, 1.18f, 0.0f), 0.30f, MakeGlass(rng));
+            s.AddEntity(new BobbingSphereEntity(sp1, 0.05f, 1.2f, 1.1f));
 
-            s.Objects.Add(new XYRect(a.X - 0.55f, a.X + 0.55f, a.Y + 1.9f, a.Y + 2.0f, a.Z + 0.2f, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.8, 1.0, 0.8)), 0.0f, 0.0f));
-            s.Objects.Add(new XYRect(a.X - 0.55f, a.X + 0.55f, a.Y + 1.9f, a.Y + 2.0f, a.Z - 0.2f, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(0.9, 2.4, 3.0)), 0.0f, 0.0f));
+            s.Add(new XYRect(a.X - 0.55f, a.X + 0.55f, a.Y + 1.9f, a.Y + 2.0f, a.Z + 0.2f, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.8, 1.0, 0.8)), 0.0f, 0.0f));
+            s.Add(new XYRect(a.X - 0.55f, a.X + 0.55f, a.Y + 1.9f, a.Y + 2.0f, a.Z - 0.2f, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(0.9, 2.4, 3.0)), 0.0f, 0.0f));
 
-            s.Lights.Add(new PointLight(new Vec3(a.X - 0.8f, yT - 0.35f, a.Z + 0.6f), new Vec3(1.2f, 0.7f, 0.6f), 55.0f));
-            s.Lights.Add(new PointLight(new Vec3(a.X + 0.8f, yT - 0.35f, a.Z - 0.6f), new Vec3(0.7f, 0.9f, 1.2f), 55.0f));
+            PointLight L0 = new PointLight(new Vec3(a.X - 0.8f, yT - 0.35f, a.Z + 0.6f), new Vec3(1.2f, 0.7f, 0.6f), 55.0f);
+            PointLight L1 = new PointLight(new Vec3(a.X + 0.8f, yT - 0.35f, a.Z - 0.6f), new Vec3(0.7f, 0.9f, 1.2f), 55.0f);
+            s.Lights.Add(L0);
+            s.Lights.Add(L1);
+            s.AddEntity(new PulsingLightEntity(L0, 1.0f, 0.30f, 0.0f));
+            s.AddEntity(new PulsingLightEntity(L1, 1.0f, 0.30f, MathF.PI));
         }
 
         private static void AddGlassGarden(Scene s, Vec3 a, Rng rng)
@@ -286,20 +306,27 @@ namespace ConsoleGame.RayTracing.Scenes
                     Vec3 c = a + new Vec3(rx * spacing, rr, rz * spacing);
                     if (rng.Bool(0.35f))
                     {
-                        s.Objects.Add(new CylinderY(a + new Vec3(rx * spacing, 0.0f, rz * spacing), rr * 0.75f, 0.0f, rr * 2.2f, true, MakeGlass(rng)));
+                        s.Add(new CylinderY(a + new Vec3(rx * spacing, 0.0f, rz * spacing), rr * 0.75f, 0.0f, rr * 2.2f, true, MakeGlass(rng)));
                     }
                     else
                     {
-                        s.Objects.Add(new Sphere(c, rr, MakeGlass(rng)));
+                        Sphere gs = new Sphere(c, rr, MakeGlass(rng));
+                        s.AddEntity(new BobbingSphereEntity(gs, 0.04f, 1.2f + rng.Range(-0.2f, 0.2f), rx * 1.1f + rz * 0.7f));
                     }
                 }
             }
 
-            s.Objects.Add(new Disk(a + new Vec3(0.0f, 0.01f, 0.0f), new Vec3(0.0f, 1.0f, 0.0f), 2.2f, (p, n, u) => new Material(new Vec3(0.96, 0.96, 0.98), 0.0, 0.88, Vec3.Zero), 0.0f, 0.0f));
+            s.Add(new Disk(a + new Vec3(0.0f, 0.01f, 0.0f), new Vec3(0.0f, 1.0f, 0.0f), 2.2f, (p, n, u) => new Material(new Vec3(0.96, 0.96, 0.98), 0.0, 0.88, Vec3.Zero), 0.0f, 0.0f));
 
-            s.Lights.Add(new PointLight(a + new Vec3(-1.2f, 2.4f, 1.0f), new Vec3(1.15f, 0.65f, 0.55f), 80.0f));
-            s.Lights.Add(new PointLight(a + new Vec3(1.2f, 2.6f, -1.0f), new Vec3(0.55f, 0.95f, 1.25f), 80.0f));
-            s.Lights.Add(new PointLight(a + new Vec3(0.0f, 3.0f, 0.0f), new Vec3(0.95f, 0.98f, 1.05f), 60.0f));
+            PointLight l0 = new PointLight(a + new Vec3(-1.2f, 2.4f, 1.0f), new Vec3(1.15f, 0.65f, 0.55f), 80.0f);
+            PointLight l1 = new PointLight(a + new Vec3(1.2f, 2.6f, -1.0f), new Vec3(0.55f, 0.95f, 1.25f), 80.0f);
+            PointLight l2 = new PointLight(a + new Vec3(0.0f, 3.0f, 0.0f), new Vec3(0.95f, 0.98f, 1.05f), 60.0f);
+            s.Lights.Add(l0);
+            s.Lights.Add(l1);
+            s.Lights.Add(l2);
+            s.AddEntity(new OrbitingLightEntity(l0, a, 2.0f, 2.4f, 0.6f, 0.0f));
+            s.AddEntity(new OrbitingLightEntity(l1, a, 2.0f, 2.6f, -0.6f, 0.5f));
+            s.AddEntity(new PulsingLightEntity(l2, 1.0f, 0.25f, 0.8f));
         }
 
         private static void AddMirrorCorridor(Scene s, Vec3 a, Rng rng)
@@ -310,18 +337,13 @@ namespace ConsoleGame.RayTracing.Scenes
             {
                 Vec3 pL = a + new Vec3(-1.6f, 0.0f, i * step);
                 Vec3 pR = a + new Vec3(1.6f, 0.0f, i * step);
-                s.Objects.Add(new CylinderY(pL, 0.22f, 0.0f, 2.1f, true, new Material(new Vec3(0.98, 0.98, 0.98), 0.00, 0.92, Vec3.Zero)));
-                s.Objects.Add(new CylinderY(pR, 0.22f, 0.0f, 2.1f, true, new Material(new Vec3(0.98, 0.98, 0.98), 0.00, 0.92, Vec3.Zero)));
-                if ((i & 1) == 0)
-                {
-                    s.Lights.Add(new PointLight(a + new Vec3(0.0f, 2.9f, i * step), new Vec3(1.15f, 0.75f, 0.65f), 38.0f));
-                }
-                else
-                {
-                    s.Lights.Add(new PointLight(a + new Vec3(0.0f, 2.9f, i * step), new Vec3(0.65f, 0.95f, 1.20f), 38.0f));
-                }
+                s.Add(new CylinderY(pL, 0.22f, 0.0f, 2.1f, true, new Material(new Vec3(0.98, 0.98, 0.98), 0.00, 0.92, Vec3.Zero)));
+                s.Add(new CylinderY(pR, 0.22f, 0.0f, 2.1f, true, new Material(new Vec3(0.98, 0.98, 0.98), 0.00, 0.92, Vec3.Zero)));
+                PointLight pl = (((i & 1) == 0) ? new PointLight(a + new Vec3(0.0f, 2.9f, i * step), new Vec3(1.15f, 0.75f, 0.65f), 38.0f) : new PointLight(a + new Vec3(0.0f, 2.9f, i * step), new Vec3(0.65f, 0.95f, 1.20f), 38.0f));
+                s.Lights.Add(pl);
+                s.AddEntity(new PulsingLightEntity(pl, 1.0f, 0.35f, i * 0.7f));
             }
-            s.Objects.Add(new XZRect(a.X - 2.2f, a.X + 2.2f, a.Z - n * step - 0.4f, a.Z + n * step + 0.4f, a.Y + 0.01f, (p, n, u) => new Material(new Vec3(0.96, 0.96, 0.98), 0.0, 0.85, Vec3.Zero), 0.0f, 0.0f));
+            s.Add(new XZRect(a.X - 2.2f, a.X + 2.2f, a.Z - n * step - 0.4f, a.Z + n * step + 0.4f, a.Y + 0.01f, (p, nrm, u) => new Material(new Vec3(0.96, 0.96, 0.98), 0.0, 0.85, Vec3.Zero), 0.0f, 0.0f));
         }
 
         private static void AddVoxelGrotto(Scene s, Vec3 a, Rng rng)
@@ -372,16 +394,18 @@ namespace ConsoleGame.RayTracing.Scenes
                 }
             };
 
-            s.Objects.Add(new VolumeGrid(cells, a + new Vec3(-2.6f, 0.0f, -2.6f), voxelSize, lookup));
+            s.Add(new VolumeGrid(cells, a + new Vec3(-2.6f, 0.0f, -2.6f), voxelSize, lookup));
 
             for (int i = 0; i < 10; i++)
             {
                 Vec3 p = a + new Vec3(rng.Range(-2.2f, 2.2f), rng.Range(0.6f, 2.2f), rng.Range(-2.2f, 2.2f));
                 Vec3 e = RandSaturated(rng, 0.25f) * 2.0f;
-                s.Objects.Add(new Sphere(p, 0.08f, new Material(new Vec3(0, 0, 0), 0.0, 0.0, e)));
+                s.Add(new Sphere(p, 0.08f, new Material(new Vec3(0, 0, 0), 0.0, 0.0, e)));
             }
 
-            s.Lights.Add(new PointLight(a + new Vec3(0.0f, 2.4f, 0.0f), new Vec3(0.85f, 1.05f, 1.10f), 85.0f));
+            PointLight pl = new PointLight(a + new Vec3(0.0f, 2.4f, 0.0f), new Vec3(0.85f, 1.05f, 1.10f), 85.0f);
+            s.Lights.Add(pl);
+            s.AddEntity(new OrbitingLightEntity(pl, a, 2.2f, 2.4f, 0.7f, 0.0f));
         }
 
         private static void AddPedestalPlaza(Scene s, Vec3 a, Rng rng)
@@ -392,7 +416,7 @@ namespace ConsoleGame.RayTracing.Scenes
             {
                 float ang = (float)(i * (Math.PI * 2.0) / count);
                 Vec3 p = a + new Vec3(MathF.Cos(ang) * 1.6f, 0.0f, MathF.Sin(ang) * 1.6f);
-                s.Objects.Add(new CylinderY(p, 0.30f, 0.0f, pedH, true, new Material(new Vec3(0.88, 0.88, 0.88), 0.00, 0.00, Vec3.Zero)));
+                s.Add(new CylinderY(p, 0.30f, 0.0f, pedH, true, new Material(new Vec3(0.88, 0.88, 0.88), 0.00, 0.00, Vec3.Zero)));
                 Material topMat = rng.Choice(new Material[]
                 {
                     new Material(new Vec3(0.98,0.98,0.98),0.0,0.90,Vec3.Zero),
@@ -401,14 +425,21 @@ namespace ConsoleGame.RayTracing.Scenes
                     new Material(new Vec3(0.78,0.60,0.20),0.18,0.08,Vec3.Zero),
                     new Material(new Vec3(0.20,0.85,0.20),0.08,0.02,Vec3.Zero)
                 });
-                s.Objects.Add(new Sphere(p + new Vec3(0.0f, pedH + 0.38f, 0.0f), 0.36f, topMat));
+                Sphere orb = new Sphere(p + new Vec3(0.0f, pedH + 0.38f, 0.0f), 0.36f, topMat);
+                s.AddEntity(new BobbingSphereEntity(orb, 0.07f, 1.3f, ang));
             }
 
-            s.Objects.Add(new Disk(a + new Vec3(0.0f, 0.015f, 0.0f), new Vec3(0.0f, 1.0f, 0.0f), 2.0f, (p, n, u) => new Material(new Vec3(0.96, 0.96, 0.98), 0.0, 0.88, Vec3.Zero), 0.0f, 0.0f));
+            s.Add(new Disk(a + new Vec3(0.0f, 0.015f, 0.0f), new Vec3(0.0f, 1.0f, 0.0f), 2.0f, (p, n, u) => new Material(new Vec3(0.96, 0.96, 0.98), 0.0, 0.88, Vec3.Zero), 0.0f, 0.0f));
 
-            s.Lights.Add(new PointLight(a + new Vec3(0.0f, 3.0f, 0.0f), new Vec3(1.00f, 0.92f, 0.80f), 55.0f));
-            s.Lights.Add(new PointLight(a + new Vec3(1.6f, 2.4f, 1.2f), new Vec3(0.65f, 0.95f, 1.25f), 50.0f));
-            s.Lights.Add(new PointLight(a + new Vec3(-1.6f, 2.4f, -1.2f), new Vec3(1.20f, 0.70f, 0.70f), 50.0f));
+            PointLight l0 = new PointLight(a + new Vec3(0.0f, 3.0f, 0.0f), new Vec3(1.00f, 0.92f, 0.80f), 55.0f);
+            PointLight l1 = new PointLight(a + new Vec3(1.6f, 2.4f, 1.2f), new Vec3(0.65f, 0.95f, 1.25f), 50.0f);
+            PointLight l2 = new PointLight(a + new Vec3(-1.6f, 2.4f, -1.2f), new Vec3(1.20f, 0.70f, 0.70f), 50.0f);
+            s.Lights.Add(l0);
+            s.Lights.Add(l1);
+            s.Lights.Add(l2);
+            s.AddEntity(new PulsingLightEntity(l0, 1.0f, 0.25f, 0.0f));
+            s.AddEntity(new PulsingLightEntity(l1, 1.0f, 0.20f, 0.7f));
+            s.AddEntity(new PulsingLightEntity(l2, 1.0f, 0.20f, 1.9f));
         }
 
         private static void AddTriangleField(Scene s, Vec3 a, Rng rng)
@@ -420,13 +451,17 @@ namespace ConsoleGame.RayTracing.Scenes
                 Vec3 p1 = a + new Vec3(rng.Range(-2.0f, 2.0f), rng.Range(0.0f, 1.0f), rng.Range(-2.0f, 2.0f));
                 Vec3 p2 = a + new Vec3(rng.Range(-2.0f, 2.0f), rng.Range(0.0f, 1.2f), rng.Range(-2.0f, 2.0f));
                 Material m = new Material(RandSaturated(rng, 0.15f), rng.Range(0.06f, 0.12f), rng.Range(0.02f, 0.08f), Vec3.Zero);
-                s.Objects.Add(new Triangle(p0, p1, p2, m));
+                s.Add(new Triangle(p0, p1, p2, m));
             }
 
-            s.Objects.Add(new Disk(a + new Vec3(0.0f, 0.012f, 0.0f), new Vec3(0.0f, 1.0f, 0.0f), 2.2f, (p, n, u) => new Material(new Vec3(0.90, 0.90, 0.94), 0.0, 0.82, Vec3.Zero), 0.0f, 0.0f));
+            s.Add(new Disk(a + new Vec3(0.0f, 0.012f, 0.0f), new Vec3(0.0f, 1.0f, 0.0f), 2.2f, (p, n, u) => new Material(new Vec3(0.90, 0.90, 0.94), 0.0, 0.82, Vec3.Zero), 0.0f, 0.0f));
 
-            s.Lights.Add(new PointLight(a + new Vec3(0.0f, 2.6f, -1.2f), new Vec3(1.15f, 0.80f, 0.75f), 60.0f));
-            s.Lights.Add(new PointLight(a + new Vec3(0.0f, 2.6f, 1.2f), new Vec3(0.70f, 0.95f, 1.25f), 60.0f));
+            PointLight l0 = new PointLight(a + new Vec3(0.0f, 2.6f, -1.2f), new Vec3(1.15f, 0.80f, 0.75f), 60.0f);
+            PointLight l1 = new PointLight(a + new Vec3(0.0f, 2.6f, 1.2f), new Vec3(0.70f, 0.95f, 1.25f), 60.0f);
+            s.Lights.Add(l0);
+            s.Lights.Add(l1);
+            s.AddEntity(new OrbitingLightEntity(l0, a, 2.4f, 2.6f, 0.5f, 0.0f));
+            s.AddEntity(new OrbitingLightEntity(l1, a, 2.4f, 2.6f, -0.5f, 0.9f));
         }
 
         private static void AddTexturedPanel(Scene s, Vec3 a, Rng rng)
@@ -456,7 +491,7 @@ namespace ConsoleGame.RayTracing.Scenes
             }
 
             float w = 3.2f, h = 2.2f;
-            s.Objects.Add(new XYRect(a.X - w, a.X + w, a.Y + 0.2f, a.Y + 0.2f + h, a.Z - 3.0f, (p, n, u) => mat, 0.0f, 0.0f));
+            s.Add(new XYRect(a.X - w, a.X + w, a.Y + 0.2f, a.Y + 0.2f + h, a.Z - 3.0f, (p, n, u) => mat, 0.0f, 0.0f));
 
             float fx0 = a.X - w - 0.02f;
             float fx1 = a.X + w + 0.02f;
@@ -464,12 +499,15 @@ namespace ConsoleGame.RayTracing.Scenes
             float fy1 = a.Y + 0.2f + h + 0.02f;
             float z = a.Z - 2.95f;
 
-            s.Objects.Add(new XYRect(fx0, fx1, fy0, fy0 + 0.04f, z, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.8, 0.9, 0.6)), 0.0f, 0.0f));
-            s.Objects.Add(new XYRect(fx0, fx1, fy1 - 0.04f, fy1, z, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(0.7, 2.7, 3.2)), 0.0f, 0.0f));
-            s.Objects.Add(new XYRect(fx0, fx0 + 0.04f, fy0, fy1, z, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.2, 2.6, 0.8)), 0.0f, 0.0f));
-            s.Objects.Add(new XYRect(fx1 - 0.04f, fx1, fy0, fy1, z, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(0.8, 2.3, 3.0)), 0.0f, 0.0f));
+            s.Add(new XYRect(fx0, fx1, fy0, fy0 + 0.04f, z, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.8, 0.9, 0.6)), 0.0f, 0.0f));
+            s.Add(new XYRect(fx0, fx1, fy1 - 0.04f, fy1, z, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(0.7, 2.7, 3.2)), 0.0f, 0.0f));
+            s.Add(new XYRect(fx0, fx0 + 0.04f, fy0, fy1, z, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.2, 2.6, 0.8)), 0.0f, 0.0f));
+            s.Add(new XYRect(fx1 - 0.04f, fx1, fy0, fy1, z, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(0.8, 2.3, 3.0)), 0.0f, 0.0f));
 
-            s.Lights.Add(new PointLight(a + new Vec3(0.0f, 2.0f, -1.6f), new Vec3(1.0f, 0.96f, 0.92f), 60.0f));
+            PointLight lp = new PointLight(a + new Vec3(0.0f, 2.0f, -1.6f), new Vec3(1.0f, 0.96f, 0.92f), 60.0f);
+            s.Lights.Add(lp);
+            s.AddEntity(new UVWobbleEntity(mat, 0.5, 0.15, 0.7f));
+            s.AddEntity(new PulsingLightEntity(lp, 1.0f, 0.25f, 0.5f));
         }
 
         private static void AddMeshShowcase(Scene s, Vec3 a, Rng rng)
@@ -479,25 +517,37 @@ namespace ConsoleGame.RayTracing.Scenes
             TryAddMeshAutoGround(s, @"assets\teapot.obj", new Material(new Vec3(0.95, 0.15, 0.15), 0.10, 0.02, Vec3.Zero), 1.0f, a + new Vec3(2.4f, 0.0f, -0.2f));
             TryAddMeshAutoGround(s, @"assets\xyzrgb_dragon.obj", new Material(new Vec3(0.98, 0.98, 0.98), 0.0, 0.90, Vec3.Zero), 1.0f, a + new Vec3(4.8f, 0.0f, -0.6f));
 
-            s.Objects.Add(new Disk(a + new Vec3(0.0f, 0.012f, 0.0f), new Vec3(0.0f, 1.0f, 0.0f), 3.0f, (p, n, u) => new Material(new Vec3(0.90, 0.90, 0.94), 0.0, 0.82, Vec3.Zero), 0.0f, 0.0f));
+            s.Add(new Disk(a + new Vec3(0.0f, 0.012f, 0.0f), new Vec3(0.0f, 1.0f, 0.0f), 3.0f, (p, n, u) => new Material(new Vec3(0.90, 0.90, 0.94), 0.0, 0.82, Vec3.Zero), 0.0f, 0.0f));
 
-            s.Lights.Add(new PointLight(a + new Vec3(-1.6f, 2.4f, 1.2f), new Vec3(1.25f, 0.65f, 0.60f), 60.0f));
-            s.Lights.Add(new PointLight(a + new Vec3(1.6f, 2.4f, -1.2f), new Vec3(0.60f, 0.95f, 1.25f), 60.0f));
-            s.Lights.Add(new PointLight(a + new Vec3(0.0f, 3.0f, 0.0f), new Vec3(0.95f, 1.00f, 0.98f), 70.0f));
+            PointLight l0 = new PointLight(a + new Vec3(-1.6f, 2.4f, 1.2f), new Vec3(1.25f, 0.65f, 0.60f), 60.0f);
+            PointLight l1 = new PointLight(a + new Vec3(1.6f, 2.4f, -1.2f), new Vec3(0.60f, 0.95f, 1.25f), 60.0f);
+            PointLight l2 = new PointLight(a + new Vec3(0.0f, 3.0f, 0.0f), new Vec3(0.95f, 1.00f, 0.98f), 70.0f);
+            s.Lights.Add(l0);
+            s.Lights.Add(l1);
+            s.Lights.Add(l2);
+            s.AddEntity(new OrbitingLightEntity(l2, a, 2.6f, 3.0f, 0.5f, 0.0f));
+            s.AddEntity(new PulsingLightEntity(l0, 1.0f, 0.25f, 0.0f));
+            s.AddEntity(new PulsingLightEntity(l1, 1.0f, 0.25f, 1.0f));
         }
 
         private static void AddLightStage(Scene s, Vec3 a, Rng rng)
         {
-            s.Objects.Add(new Disk(a + new Vec3(0.0f, 0.02f, 0.0f), new Vec3(0.0f, 1.0f, 0.0f), 1.8f, (p, n, u) => new Material(new Vec3(0.85, 0.85, 0.90), 0.0, 0.0, Vec3.Zero), 0.0f, 0.0f));
-            s.Objects.Add(new Disk(a + new Vec3(0.0f, 2.4f, 0.0f), new Vec3(0.0f, -1.0f, 0.0f), 0.7f, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(3.0, 3.0, 3.2)), 0.0f, 0.0f));
-            s.Objects.Add(new Sphere(a + new Vec3(0.0f, 0.6f, 0.0f), 0.45f, MakeGlass(rng)));
+            s.Add(new Disk(a + new Vec3(0.0f, 0.02f, 0.0f), new Vec3(0.0f, 1.0f, 0.0f), 1.8f, (p, n, u) => new Material(new Vec3(0.85, 0.85, 0.90), 0.0, 0.0, Vec3.Zero), 0.0f, 0.0f));
+            s.Add(new Disk(a + new Vec3(0.0f, 2.4f, 0.0f), new Vec3(0.0f, -1.0f, 0.0f), 0.7f, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(3.0, 3.0, 3.2)), 0.0f, 0.0f));
 
-            s.Objects.Add(new Sphere(a + new Vec3(0.9f, 0.12f, 0.0f), 0.10f, new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.8, 0.9, 0.7))));
-            s.Objects.Add(new Sphere(a + new Vec3(-0.9f, 0.12f, 0.0f), 0.10f, new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(0.7, 2.6, 3.0))));
-            s.Objects.Add(new Sphere(a + new Vec3(0.0f, 0.12f, 0.9f), 0.10f, new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.6, 2.6, 0.9))));
+            Sphere focus = new Sphere(a + new Vec3(0.0f, 0.6f, 0.0f), 0.45f, MakeGlass(rng));
+            s.AddEntity(new BobbingSphereEntity(focus, 0.10f, 1.8f, 0.0f));
 
-            s.Lights.Add(new PointLight(a + new Vec3(1.2f, 2.0f, 0.8f), new Vec3(1.0f, 0.95f, 0.9f), 55.0f));
-            s.Lights.Add(new PointLight(a + new Vec3(-1.2f, 2.0f, -0.8f), new Vec3(0.9f, 0.95f, 1.0f), 55.0f));
+            s.Add(new Sphere(a + new Vec3(0.9f, 0.12f, 0.0f), 0.10f, new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.8, 0.9, 0.7))));
+            s.Add(new Sphere(a + new Vec3(-0.9f, 0.12f, 0.0f), 0.10f, new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(0.7, 2.6, 3.0))));
+            s.Add(new Sphere(a + new Vec3(0.0f, 0.12f, 0.9f), 0.10f, new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.6, 2.6, 0.9))));
+
+            PointLight a0 = new PointLight(a + new Vec3(1.2f, 2.0f, 0.8f), new Vec3(1.0f, 0.95f, 0.9f), 55.0f);
+            PointLight a1 = new PointLight(a + new Vec3(-1.2f, 2.0f, -0.8f), new Vec3(0.9f, 0.95f, 1.0f), 55.0f);
+            s.Lights.Add(a0);
+            s.Lights.Add(a1);
+            s.AddEntity(new OrbitingLightEntity(a0, a, 1.6f, 2.0f, 0.9f, 0.0f));
+            s.AddEntity(new OrbitingLightEntity(a1, a, 1.6f, 2.0f, -0.9f, 0.6f));
         }
 
         private static void AddMetalRing(Scene s, Vec3 a, Rng rng)
@@ -515,15 +565,22 @@ namespace ConsoleGame.RayTracing.Scenes
                     new Material(new Vec3(0.96,0.58,0.25),0.20,0.08,Vec3.Zero),
                     new Material(new Vec3(0.98,0.98,0.98),0.00,0.90,Vec3.Zero)
                 });
-                s.Objects.Add(new Sphere(c, 0.32f, m));
+                s.Add(new Sphere(c, 0.32f, m));
             }
 
-            s.Objects.Add(new Sphere(a + new Vec3(0.0f, 0.62f, 0.0f), 0.38f, MakeGlass(rng)));
-            s.Objects.Add(new Sphere(a + new Vec3(0.0f, 0.62f, 0.0f), 0.12f, new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.6, 1.0, 0.8))));
+            Sphere centerGlass = new Sphere(a + new Vec3(0.0f, 0.62f, 0.0f), 0.38f, MakeGlass(rng));
+            s.AddEntity(new BobbingSphereEntity(centerGlass, 0.08f, 1.0f, 0.3f));
+            s.Add(new Sphere(a + new Vec3(0.0f, 0.62f, 0.0f), 0.12f, new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.6, 1.0, 0.8))));
 
-            s.Lights.Add(new PointLight(a + new Vec3(0.0f, 2.4f, 0.0f), new Vec3(1.0f, 0.98f, 0.95f), 70.0f));
-            s.Lights.Add(new PointLight(a + new Vec3(1.6f, 1.8f, 0.0f), new Vec3(0.65f, 0.95f, 1.25f), 55.0f));
-            s.Lights.Add(new PointLight(a + new Vec3(-1.6f, 1.8f, 0.0f), new Vec3(1.20f, 0.75f, 0.70f), 55.0f));
+            PointLight l0 = new PointLight(a + new Vec3(0.0f, 2.4f, 0.0f), new Vec3(1.0f, 0.98f, 0.95f), 70.0f);
+            PointLight l1 = new PointLight(a + new Vec3(1.6f, 1.8f, 0.0f), new Vec3(0.65f, 0.95f, 1.25f), 55.0f);
+            PointLight l2 = new PointLight(a + new Vec3(-1.6f, 1.8f, 0.0f), new Vec3(1.20f, 0.75f, 0.70f), 55.0f);
+            s.Lights.Add(l0);
+            s.Lights.Add(l1);
+            s.Lights.Add(l2);
+            s.AddEntity(new PulsingLightEntity(l0, 1.0f, 0.20f, 0.0f));
+            s.AddEntity(new PulsingLightEntity(l1, 1.0f, 0.18f, 0.6f));
+            s.AddEntity(new PulsingLightEntity(l2, 1.0f, 0.18f, 1.2f));
         }
 
         private static void AddCheckerTerrace(Scene s, Vec3 a, Rng rng)
@@ -534,15 +591,18 @@ namespace ConsoleGame.RayTracing.Scenes
             for (int i = 0; i < 4; i++)
             {
                 float y = a.Y + i * 0.3f;
-                s.Objects.Add(new XZRect(a.X - w, a.X + w, a.Z - d * (i + 1), a.Z + d * (i + 1), y, white, 0.0f, 0.0f));
+                s.Add(new XZRect(a.X - w, a.X + w, a.Z - d * (i + 1), a.Z + d * (i + 1), y, white, 0.0f, 0.0f));
                 float z0 = a.Z - d * (i + 1);
                 float z1 = a.Z + d * (i + 1);
-                s.Objects.Add(new XZRect(a.X - w, a.X + w, z0, z0 + 0.08f, y + 0.001f, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.8, 0.9, 0.7)), 0.0f, 0.0f));
-                s.Objects.Add(new XZRect(a.X - w, a.X + w, z1 - 0.08f, z1, y + 0.001f, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(0.7, 2.7, 3.2)), 0.0f, 0.0f));
+                s.Add(new XZRect(a.X - w, a.X + w, z0, z0 + 0.08f, y + 0.001f, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.8, 0.9, 0.7)), 0.0f, 0.0f));
+                s.Add(new XZRect(a.X - w, a.X + w, z1 - 0.08f, z1, y + 0.001f, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(0.7, 2.7, 3.2)), 0.0f, 0.0f));
             }
-            s.Objects.Add(new Sphere(a + new Vec3(0.0f, 0.3f * 4 + 0.35f, 0.0f), 0.35f, rng.Bool(0.5f) ? new Material(new Vec3(0.98, 0.98, 0.98), 0.00, 0.92, Vec3.Zero) : MakeGlass(rng)));
+            Sphere top = new Sphere(a + new Vec3(0.0f, 0.3f * 4 + 0.35f, 0.0f), 0.35f, rng.Bool(0.5f) ? new Material(new Vec3(0.98, 0.98, 0.98), 0.00, 0.92, Vec3.Zero) : MakeGlass(rng));
+            s.AddEntity(new BobbingSphereEntity(top, 0.07f, 1.1f, 0.0f));
 
-            s.Lights.Add(new PointLight(a + new Vec3(0.0f, 2.0f, 0.0f), new Vec3(0.95f, 1.0f, 0.95f), 55.0f));
+            PointLight L = new PointLight(a + new Vec3(0.0f, 2.0f, 0.0f), new Vec3(0.95f, 1.0f, 0.95f), 55.0f);
+            s.Lights.Add(L);
+            s.AddEntity(new PulsingLightEntity(L, 1.0f, 0.22f, 0.4f));
         }
 
         private static void AddDiffuseStacks(Scene s, Vec3 a, Rng rng)
@@ -554,11 +614,13 @@ namespace ConsoleGame.RayTracing.Scenes
                 float h = rng.Range(0.9f, 1.6f);
                 float r = rng.Range(0.25f, 0.35f);
                 Material body = new Material(RandSaturated(rng, 0.10f), rng.Range(0.06f, 0.12f), rng.Range(0.02f, 0.06f), Vec3.Zero);
-                s.Objects.Add(new CylinderY(p, r, 0.0f, h, true, body));
-                s.Objects.Add(new Sphere(p + new Vec3(0.0f, h + r * 0.8f, 0.0f), r * 0.8f, body));
-                s.Objects.Add(new XYRect(p.X - 0.25f, p.X + 0.25f, 1.65f, 1.75f, p.Z - 0.30f, (pos, nrm, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(0.9, 2.5, 3.0)), 0.0f, 0.0f));
+                s.Add(new CylinderY(p, r, 0.0f, h, true, body));
+                s.Add(new Sphere(p + new Vec3(0.0f, h + r * 0.8f, 0.0f), r * 0.8f, body));
+                s.Add(new XYRect(p.X - 0.25f, p.X + 0.25f, 1.65f, 1.75f, p.Z - 0.30f, (pos, nrm, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(0.9, 2.5, 3.0)), 0.0f, 0.0f));
             }
-            s.Lights.Add(new PointLight(a + new Vec3(0.0f, 2.2f, 0.0f), new Vec3(1.00f, 0.98f, 0.95f), 60.0f));
+            PointLight fill = new PointLight(a + new Vec3(0.0f, 2.2f, 0.0f), new Vec3(1.00f, 0.98f, 0.95f), 60.0f);
+            s.Lights.Add(fill);
+            s.AddEntity(new PulsingLightEntity(fill, 1.0f, 0.20f, 0.0f));
         }
 
         // ----------------------------------------------------------------------
@@ -585,7 +647,7 @@ namespace ConsoleGame.RayTracing.Scenes
             }
             float yTranslate = targetPos.Y + 0.5f * MathF.Max(0.1f, scale) + 0.01f;
             Vec3 translate = new Vec3(targetPos.X, yTranslate, targetPos.Z);
-            s.Objects.Add(Mesh.FromObj(objPath, mat, scale: scale, translate: translate));
+            s.Add(Mesh.FromObj(objPath, mat, scale: scale, translate: translate));
             Console.WriteLine("[Random] Mesh added: {0} (scale={1})", objPath, scale);
         }
 
@@ -662,6 +724,153 @@ namespace ConsoleGame.RayTracing.Scenes
             public int Int(int a, int bInclusive) { return a + r.Next(bInclusive - a + 1); }
             public bool Bool(float pTrue = 0.5f) { return r.NextDouble() < pTrue; }
             public T Choice<T>(IList<T> list) { if (list == null || list.Count == 0) throw new ArgumentException(); return list[r.Next(list.Count)]; }
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Dynamic entities used by this scene
+    // ----------------------------------------------------------------------
+
+    public sealed class BobbingSphereEntity : ISceneEntity
+    {
+        private readonly Sphere sphere;
+        private readonly float baseY;
+        private readonly float amplitude;
+        private readonly float speed;
+        private readonly float phase;
+        private float t;
+        public bool Enabled { get; set; } = true;
+
+        public BobbingSphereEntity(Sphere sphere, float amplitude, float speed, float phase)
+        {
+            this.sphere = sphere;
+            this.baseY = (float)sphere.Center.Y;
+            this.amplitude = amplitude;
+            this.speed = speed;
+            this.phase = phase;
+            this.t = 0.0f;
+        }
+
+        public void Update(float dt, Scene scene)
+        {
+            t += dt;
+            float y = baseY + amplitude * MathF.Sin(speed * t + phase);
+            sphere.Center = new Vec3(sphere.Center.X, y, sphere.Center.Z);
+            scene.RequestGeometryRebuild();
+        }
+
+        public IEnumerable<Hittable> GetHittables()
+        {
+            yield return sphere;
+        }
+    }
+
+    public sealed class OrbitingLightEntity : ISceneEntity
+    {
+        private readonly PointLight light;
+        private readonly Vec3 pivot;
+        private readonly float radius;
+        private readonly float height;
+        private readonly float speed;
+        private float angle;
+        private readonly float phase;
+        public bool Enabled { get; set; } = true;
+
+        public OrbitingLightEntity(PointLight light, Vec3 pivot, float radius, float height, float speed, float phase)
+        {
+            this.light = light;
+            this.pivot = pivot;
+            this.radius = radius;
+            this.height = height;
+            this.speed = speed;
+            this.phase = phase;
+            this.angle = 0.0f;
+        }
+
+        public void Update(float dt, Scene scene)
+        {
+            angle += speed * dt;
+            float a = angle + phase;
+            float x = (float)(pivot.X + radius * MathF.Cos(a));
+            float z = (float)(pivot.Z + radius * MathF.Sin(a));
+            light.Position = new Vec3(x, height, z);
+        }
+
+        public IEnumerable<Hittable> GetHittables()
+        {
+            yield break;
+        }
+    }
+
+    public sealed class PulsingLightEntity : ISceneEntity
+    {
+        private readonly PointLight light;
+        private readonly float initialIntensity;
+        private readonly float minMult;
+        private readonly float maxMult;
+        private readonly float speed;
+        private float t;
+        public bool Enabled { get; set; } = true;
+
+        // baseScale = 1.0 for around-baseline pulsing; ampFraction in [0,1) for +/- amplitude relative to base.
+        public PulsingLightEntity(PointLight light, float baseScale, float ampFraction, float speed)
+        {
+            if (light == null) throw new ArgumentNullException(nameof(light));
+            if (ampFraction < 0.0f) ampFraction = 0.0f;
+            this.light = light;
+            this.initialIntensity = light.Intensity;
+            float bs = MathF.Max(0.0f, baseScale);
+            this.minMult = MathF.Max(0.0f, bs * (1.0f - ampFraction));
+            this.maxMult = bs * (1.0f + ampFraction);
+            this.speed = speed;
+            this.t = 0.0f;
+        }
+
+        public void Update(float dt, Scene scene)
+        {
+            if (!Enabled) return;
+            if (dt < 0.0f) dt = 0.0f;
+            t += dt;
+            float s = 0.5f + 0.5f * MathF.Sin(speed * t);
+            float mult = minMult + (maxMult - minMult) * s;
+            float clamped = MathF.Max(0.0f, mult);
+            light.Intensity = initialIntensity * clamped;
+        }
+
+        public IEnumerable<Hittable> GetHittables()
+        {
+            yield break;
+        }
+    }
+
+    public sealed class UVWobbleEntity : ISceneEntity
+    {
+        private Material material;
+        private readonly double baseScale;
+        private readonly double amp;
+        private readonly float speed;
+        private float t;
+        public bool Enabled { get; set; } = true;
+
+        public UVWobbleEntity(Material material, double baseScale, double amplitude, float speed)
+        {
+            this.material = material;
+            this.baseScale = baseScale;
+            this.amp = amplitude;
+            this.speed = speed;
+            this.t = 0.0f;
+        }
+
+        public void Update(float dt, Scene scene)
+        {
+            t += dt;
+            double s = baseScale + amp * MathF.Sin(speed * t);
+            material.UVScale = s;
+        }
+
+        public IEnumerable<Hittable> GetHittables()
+        {
+            yield break;
         }
     }
 }

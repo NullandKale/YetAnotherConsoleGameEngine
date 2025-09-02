@@ -206,7 +206,7 @@ public partial class RaytraceEntity : BaseComponent
 
     public string GetInfoString()
     {
-        return $"pos=({activeScene.CameraPos.X:0.###},{activeScene.CameraPos.Y:0.###},{activeScene.CameraPos.Z:0.###}) yaw={activeScene.Yaw:0.###} pitch={activeScene.Pitch:0.###} scene={sceneIndex} objs={activeScene.Objects.Count} tris={MeshBVH.counter}   ";
+        return $"pos=({activeScene.CameraPos.X:0.###},{activeScene.CameraPos.Y:0.###},{activeScene.CameraPos.Z:0.###}) yaw={activeScene.Yaw:0.###} pitch={activeScene.Pitch:0.###} scene={sceneIndex} objs={activeScene.Objects.Count} tris={MeshBVH.counter} res=[{rtWidth},{rtHeight*2}]";
     }
 
     public override void Update(double deltaTime)

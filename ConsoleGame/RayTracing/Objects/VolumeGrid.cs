@@ -48,93 +48,98 @@ namespace ConsoleGame.RayTracing.Objects
         public Vec3 BoundsMin { get { return minCorner; } }
         public Vec3 BoundsMax { get { return new Vec3(minCorner.X + nx * voxelSize.X, minCorner.Y + ny * voxelSize.Y, minCorner.Z + nz * voxelSize.Z); } }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public override bool Hit(Ray r, float tMin, float tMax, ref HitRecord rec, float screenU, float screenV)
         {
-            Vec3 maxCorner = new Vec3(minCorner.X + nx * voxelSize.X, minCorner.Y + ny * voxelSize.Y, minCorner.Z + nz * voxelSize.Z);
-            int enterAxis = -1;
+            float minX = (float)minCorner.X; float minY = (float)minCorner.Y; float minZ = (float)minCorner.Z;
+            float sizeX = (float)voxelSize.X; float sizeY = (float)voxelSize.Y; float sizeZ = (float)voxelSize.Z;
+            float maxX = minX + nx * sizeX; float maxY = minY + ny * sizeY; float maxZ = minZ + nz * sizeZ;
+
+            int enterAxis;
             float tEnter, tExit;
-            if (!RayAabb(r, minCorner, maxCorner, out tEnter, out tExit, out enterAxis)) return false;
-            float t = MathF.Max(tEnter, tMin);
-            if (t > tMax || t > tExit) return false;
-
-            Vec3 p = r.At(t + 1e-6f);
-            int ix = ClampToGrid((int)MathF.Floor((p.X - minCorner.X) / voxelSize.X), nx);
-            int iy = ClampToGrid((int)MathF.Floor((p.Y - minCorner.Y) / voxelSize.Y), ny);
-            int iz = ClampToGrid((int)MathF.Floor((p.Z - minCorner.Z) / voxelSize.Z), nz);
-
-            int stepX = r.Dir.X > 0.0 ? 1 : r.Dir.X < 0.0 ? -1 : 0;
-            int stepY = r.Dir.Y > 0.0 ? 1 : r.Dir.Y < 0.0 ? -1 : 0;
-            int stepZ = r.Dir.Z > 0.0 ? 1 : r.Dir.Z < 0.0 ? -1 : 0;
-
-            float nextVx = minCorner.X + (stepX > 0 ? (ix + 1) * (float)voxelSize.X : ix * (float)voxelSize.X);
-            float nextVy = minCorner.Y + (stepY > 0 ? (iy + 1) * (float)voxelSize.Y : iy * (float)voxelSize.Y);
-            float nextVz = minCorner.Z + (stepZ > 0 ? (iz + 1) * (float)voxelSize.Z : iz * (float)voxelSize.Z);
-
-            float tMaxX = stepX == 0 ? float.PositiveInfinity : (nextVx - (float)r.Origin.X) / (float)r.Dir.X;
-            float tMaxY = stepY == 0 ? float.PositiveInfinity : (nextVy - (float)r.Origin.Y) / (float)r.Dir.Y;
-            float tMaxZ = stepZ == 0 ? float.PositiveInfinity : (nextVz - (float)r.Origin.Z) / (float)r.Dir.Z;
-
-            float tDeltaX = stepX == 0 ? float.PositiveInfinity : MathF.Abs((float)voxelSize.X / (float)r.Dir.X);
-            float tDeltaY = stepY == 0 ? float.PositiveInfinity : MathF.Abs((float)voxelSize.Y / (float)r.Dir.Y);
-            float tDeltaZ = stepZ == 0 ? float.PositiveInfinity : MathF.Abs((float)voxelSize.Z / (float)r.Dir.Z);
-
-            int lastAxis = enterAxis;
-            if (lastAxis < 0)
-            {
-                lastAxis = AxisOfNextCrossing(t, tMaxX, tMaxY, tMaxZ);
-            }
+            if (!RayAabb(r, new Vec3(minX, minY, minZ), new Vec3(maxX, maxY, maxZ), out tEnter, out tExit, out enterAxis)) return false;
+            float t = tEnter; if (t < tMin) t = tMin; if (t > tMax || t > tExit) return false;
 
             const float eps = 1e-6f;
+            t += eps;
+
+            float ox = (float)r.Origin.X; float oy = (float)r.Origin.Y; float oz = (float)r.Origin.Z;
+            float dx = (float)r.Dir.X; float dy = (float)r.Dir.Y; float dz = (float)r.Dir.Z;
+
+            float px = ox + dx * t; float py = oy + dy * t; float pz = oz + dz * t;
+
+            int ix = (int)MathF.Floor((px - minX) / sizeX); if (ix < 0) ix = 0; else if (ix >= nx) ix = nx - 1;
+            int iy = (int)MathF.Floor((py - minY) / sizeY); if (iy < 0) iy = 0; else if (iy >= ny) iy = ny - 1;
+            int iz = (int)MathF.Floor((pz - minZ) / sizeZ); if (iz < 0) iz = 0; else if (iz >= nz) iz = nz - 1;
+
+            int stepX = dx > 0.0f ? 1 : dx < 0.0f ? -1 : 0;
+            int stepY = dy > 0.0f ? 1 : dy < 0.0f ? -1 : 0;
+            int stepZ = dz > 0.0f ? 1 : dz < 0.0f ? -1 : 0;
+
+            float invDx = stepX == 0 ? 0.0f : 1.0f / dx;
+            float invDy = stepY == 0 ? 0.0f : 1.0f / dy;
+            float invDz = stepZ == 0 ? 0.0f : 1.0f / dz;
+
+            float nextVx = minX + (stepX > 0 ? (ix + 1) * sizeX : ix * sizeX);
+            float nextVy = minY + (stepY > 0 ? (iy + 1) * sizeY : iy * sizeY);
+            float nextVz = minZ + (stepZ > 0 ? (iz + 1) * sizeZ : iz * sizeZ);
+
+            float tMaxX = stepX == 0 ? float.PositiveInfinity : (nextVx - ox) * invDx;
+            float tMaxY = stepY == 0 ? float.PositiveInfinity : (nextVy - oy) * invDy;
+            float tMaxZ = stepZ == 0 ? float.PositiveInfinity : (nextVz - oz) * invDz;
+
+            float tDeltaX = stepX == 0 ? float.PositiveInfinity : MathF.Abs(sizeX * invDx);
+            float tDeltaY = stepY == 0 ? float.PositiveInfinity : MathF.Abs(sizeY * invDy);
+            float tDeltaZ = stepZ == 0 ? float.PositiveInfinity : MathF.Abs(sizeZ * invDz);
+
+            int lastAxis = enterAxis < 0 ? (tMaxX <= tMaxY && tMaxX <= tMaxZ ? 0 : tMaxY <= tMaxZ ? 1 : 2) : enterAxis;
+
+            var localCells = cells;
+            var lookup = materialLookup;
+            bool wf = wireframe;
+            float wireMax2 = wireMaxDistance <= 0.0f ? -1.0f : wireMaxDistance * wireMaxDistance;
+            float dirLen2 = dx * dx + dy * dy + dz * dz;
 
             while (t <= tExit && t <= tMax)
             {
-                if (ix >= 0 && ix < nx && iy >= 0 && iy < ny && iz >= 0 && iz < nz)
+                if ((uint)ix < (uint)nx && (uint)iy < (uint)ny && (uint)iz < (uint)nz)
                 {
-                    var cell = cells[ix, iy, iz];
-                    int matId = cell.Item1;
-                    int metaId = cell.Item2;
+                    var cell = localCells[ix, iy, iz];
+                    int matId = cell.matId;
                     if (matId > 0)
                     {
-                        int normalAxis;
-                        float hitT;
-                        if (lastAxis >= 0)
+                        int normalAxis = lastAxis;
+                        float hitT = MathF.Max(t, tMin);
+                        if (normalAxis < 0)
                         {
-                            normalAxis = lastAxis;
-                            hitT = MathF.Max(t, tMin);
-                        }
-                        else
-                        {
-                            int axisNext = AxisOfNextCrossing(t, tMaxX, tMaxY, tMaxZ);
-                            if (axisNext < 0) return false;
-                            float tNext = axisNext == 0 ? tMaxX : axisNext == 1 ? tMaxY : tMaxZ;
-                            normalAxis = axisNext;
-                            hitT = MathF.Max(tNext, tMin);
+                            if (tMaxX <= tMaxY && tMaxX <= tMaxZ) { normalAxis = 0; hitT = MathF.Max(tMaxX, tMin); }
+                            else if (tMaxY <= tMaxZ) { normalAxis = 1; hitT = MathF.Max(tMaxY, tMin); }
+                            else { normalAxis = 2; hitT = MathF.Max(tMaxZ, tMin); }
                         }
 
                         Vec3 n = FaceNormalFromAxis(normalAxis, stepX, stepY, stepZ);
-
-                        Material m = materialLookup(matId, metaId);
-
                         Vec3 hitPoint = r.At(hitT);
 
-                        // Distance-gated wireframe
                         bool withinWireRange = false;
-                        if (wireframe && wireMaxDistance > 0.0f)
+                        if (wf && wireMax2 >= 0.0f)
                         {
-                            double dirLen = Math.Sqrt(r.Dir.X * r.Dir.X + r.Dir.Y * r.Dir.Y + r.Dir.Z * r.Dir.Z);
-                            double camDist = hitT * (dirLen > 0.0 ? dirLen : 1.0);
-                            withinWireRange = camDist <= wireMaxDistance + 1e-6;
+                            float dist2 = hitT * hitT * dirLen2;
+                            withinWireRange = dist2 <= wireMax2;
                         }
 
-                        // Update center block cache if this is the center ray; then check if current cell matches cached center.
-                        bool isCenterRay = IsCenterUV(screenU, screenV);
-                        if (isCenterRay)
+                        bool isCenterBlock = false;
+                        if (wf)
                         {
-                            centerIx = ix; centerIy = iy; centerIz = iz; centerValid = true;
+                            bool isCenterRay = IsCenterUV(screenU, screenV);
+                            if (isCenterRay)
+                            {
+                                centerIx = ix; centerIy = iy; centerIz = iz; centerValid = true;
+                            }
+                            isCenterBlock = centerValid && ix == centerIx && iy == centerIy && iz == centerIz;
                         }
-                        bool isCenterBlock = centerValid && ix == centerIx && iy == centerIy && iz == centerIz;
 
-                        if (wireframe && withinWireRange && IsWireOnFace(hitPoint, ix, iy, iz, normalAxis))
+                        Material m = lookup(matId, cell.metaId);
+                        if (wf && withinWireRange && IsWireOnFace(hitPoint, ix, iy, iz, normalAxis))
                         {
                             m.Albedo = isCenterBlock ? WireColorCenter : WireColor;
                         }
@@ -149,22 +154,29 @@ namespace ConsoleGame.RayTracing.Objects
                     }
                 }
 
-                float tNextCross = MathF.Min(tMaxX, MathF.Min(tMaxY, tMaxZ));
-                if (tNextCross > tExit || tNextCross > tMax) break;
+                if (tMaxX <= tMaxY && tMaxX <= tMaxZ)
+                {
+                    ix += stepX;
+                    t = tMaxX;
+                    tMaxX += tDeltaX;
+                    lastAxis = 0;
+                }
+                else if (tMaxY <= tMaxZ)
+                {
+                    iy += stepY;
+                    t = tMaxY;
+                    tMaxY += tDeltaY;
+                    lastAxis = 1;
+                }
+                else
+                {
+                    iz += stepZ;
+                    t = tMaxZ;
+                    tMaxZ += tDeltaZ;
+                    lastAxis = 2;
+                }
 
-                bool stepAlongX = stepX != 0 && NearlyEqual(tMaxX, tNextCross, eps);
-                bool stepAlongY = stepY != 0 && NearlyEqual(tMaxY, tNextCross, eps);
-                bool stepAlongZ = stepZ != 0 && NearlyEqual(tMaxZ, tNextCross, eps);
-
-                int chosenAxis = SelectNormalAxis(stepAlongX, stepAlongY, stepAlongZ, r.Dir);
-                if (stepAlongX) { ix += stepX; tMaxX += tDeltaX; }
-                if (stepAlongY) { iy += stepY; tMaxY += tDeltaY; }
-                if (stepAlongZ) { iz += stepZ; tMaxZ += tDeltaZ; }
-
-                t = tNextCross;
-                lastAxis = chosenAxis;
-
-                if (ix < 0 || ix >= nx || iy < 0 || iy >= ny || iz < 0 || iz >= nz) break;
+                if ((uint)ix >= (uint)nx || (uint)iy >= (uint)ny || (uint)iz >= (uint)nz) break;
             }
 
             return false;

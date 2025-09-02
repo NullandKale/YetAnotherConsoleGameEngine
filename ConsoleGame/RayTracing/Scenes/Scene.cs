@@ -55,6 +55,10 @@ namespace ConsoleGame.RayTracing.Scenes
         private int CoarseDetectCount = 0;
         private const int CoarseDetectThreshold = 6;
 
+        // Game-logic entity layer
+        private readonly List<ISceneEntity> Entities = new List<ISceneEntity>();
+        private bool GeometryDirty = false;
+
         public virtual void RebuildBVH()
         {
             bvh = new BVH(Objects);
@@ -96,12 +100,33 @@ namespace ConsoleGame.RayTracing.Scenes
                 TimeMS += deltaTimeMS;
             }
 
+            float dt = deltaTimeMS * 0.001f;
+            if (dt < 0.0f)
+            {
+                dt = 0.0f;
+            }
+
+            for (int i = 0; i < Entities.Count; i++)
+            {
+                ISceneEntity e = Entities[i];
+                if (e != null && e.Enabled)
+                {
+                    e.Update(dt, this);
+                }
+            }
+
+            if (GeometryDirty)
+            {
+                GeometryDirty = false;
+                SyncObjectsFromEntities();
+                RebuildBVH();
+            }
+
             if (!OrbitMode)
             {
                 return;
             }
 
-            float dt = deltaTimeMS * 0.001f;
             if (dt <= 0.0f)
             {
                 return;
@@ -444,6 +469,91 @@ namespace ConsoleGame.RayTracing.Scenes
         private static Vec3 Cross(Vec3 a, Vec3 b)
         {
             return new Vec3(a.Y * b.Z - a.Z * b.Y, a.Z * b.X - a.X * b.Z, a.X * b.Y - a.Y * b.X);
+        }
+
+        // ==== Game-logic entity management API ====
+
+        public void AddEntity(ISceneEntity entity)
+        {
+            if (entity == null) return;
+            Entities.Add(entity);
+            GeometryDirty = true;
+        }
+
+        public bool RemoveEntity(ISceneEntity entity)
+        {
+            bool removed = Entities.Remove(entity);
+            if (removed) GeometryDirty = true;
+            return removed;
+        }
+
+        public void ClearEntities()
+        {
+            Entities.Clear();
+            GeometryDirty = true;
+        }
+
+        public ISceneEntity Add(Hittable h)
+        {
+            if (h == null) return null;
+            StaticHittableEntity e = new StaticHittableEntity(h);
+            AddEntity(e);
+            return e;
+        }
+
+        public void RequestGeometryRebuild()
+        {
+            GeometryDirty = true;
+        }
+
+        public IReadOnlyList<Hittable> Drawables
+        {
+            get { return Objects; }
+        }
+
+        private void SyncObjectsFromEntities()
+        {
+            Objects.Clear();
+            for (int i = 0; i < Entities.Count; i++)
+            {
+                ISceneEntity e = Entities[i];
+                if (e != null && e.Enabled)
+                {
+                    IEnumerable<Hittable> hs = e.GetHittables();
+                    if (hs == null) continue;
+                    foreach (Hittable h in hs)
+                    {
+                        if (h != null) Objects.Add(h);
+                    }
+                }
+            }
+        }
+    }
+
+    public interface ISceneEntity
+    {
+        bool Enabled { get; set; }
+        void Update(float dt, Scene scene);
+        IEnumerable<Hittable> GetHittables();
+    }
+
+    public sealed class StaticHittableEntity : ISceneEntity
+    {
+        private readonly Hittable h;
+        public bool Enabled { get; set; } = true;
+
+        public StaticHittableEntity(Hittable hittable)
+        {
+            h = hittable;
+        }
+
+        public void Update(float dt, Scene scene)
+        {
+        }
+
+        public IEnumerable<Hittable> GetHittables()
+        {
+            yield return h;
         }
     }
 }
