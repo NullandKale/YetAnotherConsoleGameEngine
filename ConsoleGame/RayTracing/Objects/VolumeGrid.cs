@@ -1,15 +1,36 @@
 ﻿using System;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using ConsoleGame.RayTracing;
 
 namespace ConsoleGame.RayTracing.Objects
 {
-    public sealed class VolumeGrid : Hittable
+    public sealed unsafe class VolumeGrid : Hittable, IDisposable
     {
-        private readonly (int matId, int metaId)[,,] cells;
+        // === Bricked, pinned SoA storage laid out in Z-order (Morton) within each brick ===
+        private const int BrickShift = 3; // 8^3 bricks
+        private const int BrickSize = 1 << BrickShift; // 8
+        private const int BrickMask = BrickSize - 1; // 7
+        private const int BrickVolume = BrickSize * BrickSize * BrickSize; // 512
+
         private readonly int nx;
         private readonly int ny;
         private readonly int nz;
+        private readonly int nbx;
+        private readonly int nby;
+        private readonly int nbz;
+        private readonly int brickCount;
+        private readonly int capacity;
+
+        private readonly int[] mat;     // SoA: material IDs
+        private readonly int[] meta;    // SoA: metadata IDs
+
+        private GCHandle matHandle;
+        private GCHandle metaHandle;
+
+        private readonly int* matPtr;
+        private readonly int* metaPtr;
+
         private readonly Vec3 minCorner;
         private readonly Vec3 voxelSize;
         private readonly Func<int, int, Material> materialLookup;
@@ -28,13 +49,29 @@ namespace ConsoleGame.RayTracing.Objects
         private int centerIz = int.MinValue;
         private bool centerValid = false;
 
+        private bool disposed = false;
+
         // Backwards-compatible signature: aoStrength retained but ignored; new wireframe params appended with defaults.
         public VolumeGrid((int, int)[,,] cells, Vec3 minCorner, Vec3 voxelSize, Func<int, int, Material> materialLookup, bool enableWireframe = true, float wireWidthFraction = 0.06f, float wireMaxDistance = 16.0f)
         {
-            this.cells = cells;
             nx = cells.GetLength(0);
             ny = cells.GetLength(1);
             nz = cells.GetLength(2);
+
+            nbx = (nx + BrickMask) >> BrickShift;
+            nby = (ny + BrickMask) >> BrickShift;
+            nbz = (nz + BrickMask) >> BrickShift;
+            brickCount = nbx * nby * nbz;
+            capacity = brickCount * BrickVolume;
+
+            this.mat = new int[capacity];
+            this.meta = new int[capacity];
+
+            matHandle = GCHandle.Alloc(mat, GCHandleType.Pinned);
+            metaHandle = GCHandle.Alloc(meta, GCHandleType.Pinned);
+            matPtr = (int*)matHandle.AddrOfPinnedObject().ToPointer();
+            metaPtr = (int*)metaHandle.AddrOfPinnedObject().ToPointer();
+
             this.minCorner = minCorner;
             this.voxelSize = new Vec3(MathF.Max(1e-6f, voxelSize.X), MathF.Max(1e-6f, voxelSize.Y), MathF.Max(1e-6f, voxelSize.Z));
             this.materialLookup = materialLookup;
@@ -43,6 +80,16 @@ namespace ConsoleGame.RayTracing.Objects
             this.wireWidthFrac = wireWidthFraction;
             if (wireMaxDistance < 0.0f) wireMaxDistance = 0.0f;
             this.wireMaxDistance = wireMaxDistance;
+
+            for (int iz = 0; iz < nz; iz++)
+                for (int iy = 0; iy < ny; iy++)
+                    for (int ix = 0; ix < nx; ix++)
+                    {
+                        var c = cells[ix, iy, iz];
+                        int idx = IndexOf(ix, iy, iz);
+                        matPtr[idx] = c.Item1;
+                        metaPtr[idx] = c.Item2;
+                    }
         }
 
         public Vec3 BoundsMin { get { return minCorner; } }
@@ -94,7 +141,6 @@ namespace ConsoleGame.RayTracing.Objects
 
             int lastAxis = enterAxis < 0 ? (tMaxX <= tMaxY && tMaxX <= tMaxZ ? 0 : tMaxY <= tMaxZ ? 1 : 2) : enterAxis;
 
-            var localCells = cells;
             var lookup = materialLookup;
             bool wf = wireframe;
             float wireMax2 = wireMaxDistance <= 0.0f ? -1.0f : wireMaxDistance * wireMaxDistance;
@@ -104,10 +150,12 @@ namespace ConsoleGame.RayTracing.Objects
             {
                 if ((uint)ix < (uint)nx && (uint)iy < (uint)ny && (uint)iz < (uint)nz)
                 {
-                    var cell = localCells[ix, iy, iz];
-                    int matId = cell.matId;
+                    int idx = IndexOf(ix, iy, iz);
+                    int matId = matPtr[idx];
                     if (matId > 0)
                     {
+                        int metaId = metaPtr[idx];
+
                         int normalAxis = lastAxis;
                         float hitT = MathF.Max(t, tMin);
                         if (normalAxis < 0)
@@ -138,7 +186,7 @@ namespace ConsoleGame.RayTracing.Objects
                             isCenterBlock = centerValid && ix == centerIx && iy == centerIy && iz == centerIz;
                         }
 
-                        Material m = lookup(matId, cell.metaId);
+                        Material m = lookup(matId, metaId);
                         if (wf && withinWireRange && IsWireOnFace(hitPoint, ix, iy, iz, normalAxis))
                         {
                             m.Albedo = isCenterBlock ? WireColorCenter : WireColor;
@@ -180,6 +228,27 @@ namespace ConsoleGame.RayTracing.Objects
             }
 
             return false;
+        }
+
+        // === Brick/Z-order addressing ===
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private int IndexOf(int ix, int iy, int iz)
+        {
+            int bx = ix >> BrickShift; int by = iy >> BrickShift; int bz = iz >> BrickShift;
+            int lx = ix & BrickMask; int ly = iy & BrickMask; int lz = iz & BrickMask;
+            int brickLinear = ((bz * nby) + by) * nbx + bx;
+            int localMorton = Morton3_3bits(lx, ly, lz);
+            return brickLinear * BrickVolume + localMorton;
+        }
+
+        // Interleave 3 low bits of x,y,z: [x2 y2 z2 x1 y1 z1 x0 y0 z0]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int Morton3_3bits(int x, int y, int z)
+        {
+            int m = ((x & 1) << 0) | ((y & 1) << 1) | ((z & 1) << 2)
+                  | ((x & 2) << 2) | ((y & 2) << 3) | ((z & 2) << 4)
+                  | ((x & 4) << 4) | ((y & 4) << 5) | ((z & 4) << 6);
+            return m;
         }
 
         // === Wireframe helper ===
@@ -332,6 +401,20 @@ namespace ConsoleGame.RayTracing.Objects
             cy = 0.5f * (minY + maxY);
             cz = 0.5f * (minZ + maxZ);
             return true;
+        }
+
+        // === Disposal for pinned buffers ===
+        public void Dispose()
+        {
+            if (disposed) return;
+            disposed = true;
+            if (matHandle.IsAllocated) matHandle.Free();
+            if (metaHandle.IsAllocated) metaHandle.Free();
+        }
+
+        ~VolumeGrid()
+        {
+            Dispose();
         }
     }
 }

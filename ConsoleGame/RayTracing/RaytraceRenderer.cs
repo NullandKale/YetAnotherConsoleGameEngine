@@ -30,19 +30,22 @@ namespace ConsoleGame.RayTracing
 
         private const int DiffuseBounces = 1;
         private const int IndirectSamples = 1;
-        private const int MaxMirrorBounces = 1;
-        private const int MaxRefractions = 1;
+        private const int MaxMirrorBounces = 2;
+        private const int MaxRefractions = 2;
         private const float MirrorThreshold = 0.9f;
         private const float Eps = 1e-4f;
 
         private const float MaxLuminance = 1.0f;
         private const ulong SeedSalt = 0x9E3779B97F4A7C15UL;
 
-        private float taaAlpha = 0.15f;
+        private float taaAlpha = 0.05f;
         private const float MotionTransReset = 0.0025f;
         private const float MotionRotReset = 0.0025f;
 
         private Fast2D<Ray> rays;
+        private Fast2D<Vec3> gAlbedo;
+        private Fast2D<Vec3> gNormal;
+        private Fast2D<float> gDepth;
 
         private int procCount;
         private FixedThreadFor threadpool;
@@ -53,9 +56,20 @@ namespace ConsoleGame.RayTracing
         private TemporalAA taa;
         private ToneMapper toneMapper;
 
+        // Scratch buffers for spatial denoising
+        private Fast2D<Vec3> spatialA;
+        private Fast2D<Vec3> spatialB;
+
         private const float Pi = 3.14159265358979323846f;
         private const float InvPi = 1.0f / Pi;
         private const float DiffuseSigmaDeg = 25.0f;
+
+        // Temporal history with per-pixel guides for stability
+        private Fast2D<Vec3> taaHistory;
+        private bool taaHistoryValid = false;
+        private Fast2D<Vec3> prevNormal;
+        private Fast2D<float> prevDepth;
+        private Fast2D<bool> prevSky;
 
         public RaytraceRenderer(Framebuffer framebuffer, Scene scene, float fovDeg, int pxW, int pxH, int superSample)
         {
@@ -75,9 +89,20 @@ namespace ConsoleGame.RayTracing
             frameBuffer = new Fast2D<Chexel>(fbW, fbH);
             rays = new Fast2D<Ray>(hiW, hiH);
             skyMask = new Fast2D<bool>(hiW, hiH);
+            gAlbedo = new Fast2D<Vec3>(hiW, hiH);
+            gNormal = new Fast2D<Vec3>(hiW, hiH);
+            gDepth = new Fast2D<float>(hiW, hiH);
 
             taa = new TemporalAA(hiW, hiH, taaAlpha, MotionTransReset, MotionRotReset);
             toneMapper = new ToneMapper();
+
+            spatialA = new Fast2D<Vec3>(hiW, hiH);
+            spatialB = new Fast2D<Vec3>(hiW, hiH);
+
+            taaHistory = new Fast2D<Vec3>(hiW, hiH);
+            prevNormal = new Fast2D<Vec3>(hiW, hiH);
+            prevDepth = new Fast2D<float>(hiW, hiH);
+            prevSky = new Fast2D<bool>(hiW, hiH);
 
             scene.RebuildBVH();
         }
@@ -96,8 +121,20 @@ namespace ConsoleGame.RayTracing
             frameBuffer = new Fast2D<Chexel>(fbW, fbH);
             rays = new Fast2D<Ray>(hiW, hiH);
             skyMask = new Fast2D<bool>(hiW, hiH);
+            gAlbedo = new Fast2D<Vec3>(hiW, hiH);
+            gNormal = new Fast2D<Vec3>(hiW, hiH);
+            gDepth = new Fast2D<float>(hiW, hiH);
 
             taa.Resize(hiW, hiH);
+
+            spatialA = new Fast2D<Vec3>(hiW, hiH);
+            spatialB = new Fast2D<Vec3>(hiW, hiH);
+
+            taaHistory = new Fast2D<Vec3>(hiW, hiH);
+            prevNormal = new Fast2D<Vec3>(hiW, hiH);
+            prevDepth = new Fast2D<float>(hiW, hiH);
+            prevSky = new Fast2D<bool>(hiW, hiH);
+            taaHistoryValid = false;
         }
 
         public void SetCamera(Vec3 pos, float yaw, float pitch)
@@ -131,7 +168,7 @@ namespace ConsoleGame.RayTracing
                 pitchSnapshot = pitch;
             }
 
-            bool resetHistory = taa.ShouldResetHistory(camPosSnapshot, yawSnapshot, pitchSnapshot);
+            bool resetHistory = taa.ShouldResetHistory(camPosSnapshot, yawSnapshot, pitchSnapshot) || scene.HasDynamicTextures;
 
             Camera cam = BuildCamera(camPosSnapshot, yawSnapshot, pitchSnapshot, fovDeg, aspect);
 
@@ -168,16 +205,26 @@ namespace ConsoleGame.RayTracing
                 float vCenter = (py + 0.5f) / hiH;
 
                 bool isSky;
-                Vec3 cur = TraceFull(scene, rays[px, py], 0, 0, ref rng, uCenter, vCenter, out isSky);
+                PrimaryGBuffer gbuf;
+                Vec3 cur = TraceFull(scene, rays[px, py], 0, 0, ref rng, uCenter, vCenter, out isSky, out gbuf);
                 skyMask[px, py] = isSky;
 
                 currentHdr[px, py] = cur;
+                gAlbedo[px, py] = gbuf.Albedo;
+                gNormal[px, py] = gbuf.Normal;
+                gDepth[px, py] = gbuf.Depth;
             });
 
-            Fast2D<Vec3> blendedHdr = taa.BlendIntoHistory(currentHdr, resetHistory);
+            Fast2D<Vec3> blendedHdr = TemporalBlendWithClamp(currentHdr, gNormal, gDepth, skyMask, resetHistory, clampRadius: 1, luminancePad: 0.10f);
+
+            // Edge-aware spatial denoise on temporally blended color
+            Fast2D<Vec3> denoisedHdr = ApplyAtrousDenoise(
+                blendedHdr, gAlbedo, gNormal, gDepth, skyMask,
+                spatialA, spatialB,
+                iterations: 3, cPhi: 3.0f, nPhi: 0.35f, zPhi: 2.0f, aPhi: 0.20f);
 
             int step = Math.Max(2, ss * 2);
-            toneMapper.UpdateExposure(blendedHdr, skyMask, step);
+            toneMapper.UpdateExposure(denoisedHdr, skyMask, step);
 
             threadpool.For(0, procCount, worker =>
             {
@@ -199,8 +246,8 @@ namespace ConsoleGame.RayTracing
                             for (int sx = 0; sx < ss; sx++)
                             {
                                 int x = xPx0 + sx;
-                                topSum = topSum + blendedHdr[x, yTop];
-                                botSum = botSum + blendedHdr[x, yBot];
+                                topSum = topSum + denoisedHdr[x, yTop];
+                                botSum = botSum + denoisedHdr[x, yBot];
                             }
                         }
                         float inv = 1.0f / (ss * ss);
@@ -217,6 +264,144 @@ namespace ConsoleGame.RayTracing
             });
 
             taa.CommitCamera(camPosSnapshot, yawSnapshot, pitchSnapshot);
+        }
+
+        private static float Luma(Vec3 c)
+        {
+            return 0.2126f * c.X + 0.7152f * c.Y + 0.0722f * c.Z;
+        }
+
+        private Fast2D<Vec3> TemporalBlendWithClamp(
+            Fast2D<Vec3> current,
+            Fast2D<Vec3> normal,
+            Fast2D<float> depth,
+            Fast2D<bool> sky,
+            bool forceReset,
+            int clampRadius = 1,
+            float luminancePad = 0.10f)
+        {
+            int w = current.Width;
+            int h = current.Height;
+            if (!taaHistoryValid || forceReset || taaHistory == null || taaHistory.Width != w || taaHistory.Height != h)
+            {
+                taaHistory = new Fast2D<Vec3>(w, h);
+                prevNormal = new Fast2D<Vec3>(w, h);
+                prevDepth = new Fast2D<float>(w, h);
+                prevSky = new Fast2D<bool>(w, h);
+                for (int y = 0; y < h; y++)
+                {
+                    for (int x = 0; x < w; x++)
+                    {
+                        taaHistory[x, y] = current[x, y];
+                        prevNormal[x, y] = normal[x, y];
+                        prevDepth[x, y] = depth[x, y];
+                        prevSky[x, y] = sky[x, y];
+                    }
+                }
+                taaHistoryValid = true;
+                return taaHistory;
+            }
+
+            float alpha = MathF.Max(0.0f, MathF.Min(1.0f, taaAlpha));
+            int r = Math.Max(0, clampRadius);
+
+            for (int y = 0; y < h; y++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    Vec3 cur = current[x, y];
+                    Vec3 prev = taaHistory[x, y];
+
+                    // Disocclusion / reactive mask using guides
+                    bool skyNow = sky[x, y];
+                    bool skyPrev = prevSky[x, y];
+                    float localAlpha = alpha;
+                    if (skyNow != skyPrev)
+                    {
+                        localAlpha = 1.0f;
+                    }
+                    else
+                    {
+                        float zNow = depth[x, y];
+                        float zPrev = prevDepth[x, y];
+                        Vec3 nNow = normal[x, y].Normalized();
+                        Vec3 nPrev = prevNormal[x, y].Normalized();
+
+                        if (!float.IsFinite(zNow) || !float.IsFinite(zPrev))
+                        {
+                            localAlpha = 1.0f;
+                        }
+                        else
+                        {
+                            float dz = MathF.Abs(zNow - zPrev);
+                            float rel = dz / MathF.Max(1e-4f, MathF.Min(zNow, zPrev));
+                            float ndot = nNow.Dot(nPrev);
+                            if (rel > 0.05f || ndot < 0.8f)
+                            {
+                                localAlpha = 1.0f;
+                            }
+                        }
+                    }
+
+                    // Neighborhood luminance clamp to reduce flashing
+                    float minL = float.PositiveInfinity;
+                    float maxL = float.NegativeInfinity;
+                    for (int oy = -r; oy <= r; oy++)
+                    {
+                        int sy = y + oy; if (sy < 0) sy = 0; else if (sy >= h) sy = h - 1;
+                        for (int ox = -r; ox <= r; ox++)
+                        {
+                            int sx = x + ox; if (sx < 0) sx = 0; else if (sx >= w) sx = w - 1;
+                            if (sky[sx, sy] != sky[x, y]) continue;
+                            float l = Luma(current[sx, sy]);
+                            if (l < minL) minL = l;
+                            if (l > maxL) maxL = l;
+                        }
+                    }
+                    float pad = luminancePad;
+                    float range = maxL - minL;
+                    float lMin = minL - range * pad;
+                    float lMax = maxL + range * pad;
+                    float prevL = Luma(prev);
+                    if (prevL > lMax)
+                    {
+                        float s = lMax / MathF.Max(1e-6f, prevL);
+                        prev = new Vec3(prev.X * s, prev.Y * s, prev.Z * s);
+                    }
+                    else if (prevL < lMin)
+                    {
+                        float s = lMin / MathF.Max(1e-6f, prevL);
+                        prev = new Vec3(prev.X * s, prev.Y * s, prev.Z * s);
+                    }
+
+                    Vec3 outC = new Vec3(
+                        prev.X * (1.0f - localAlpha) + cur.X * localAlpha,
+                        prev.Y * (1.0f - localAlpha) + cur.Y * localAlpha,
+                        prev.Z * (1.0f - localAlpha) + cur.Z * localAlpha);
+
+                    taaHistory[x, y] = outC;
+                }
+            }
+
+            // Update guides for next frame
+            for (int y = 0; y < h; y++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    prevNormal[x, y] = normal[x, y];
+                    prevDepth[x, y] = depth[x, y];
+                    prevSky[x, y] = sky[x, y];
+                }
+            }
+
+            return taaHistory;
+        }
+
+        private struct PrimaryGBuffer
+        {
+            public Vec3 Albedo;
+            public Vec3 Normal;
+            public float Depth;
         }
 
         private static Camera BuildCamera(Vec3 pos, float yaw, float pitch, float fovDeg, float aspect)
@@ -260,7 +445,7 @@ namespace ConsoleGame.RayTracing
             public bool IsPrimary;
         }
 
-        private static Vec3 TraceFull(Scene scene, Ray r, int mirrorDepthIgnored, int diffuseDepthIgnored, ref RaytraceSampler.Rng rng, float screenU, float screenV, out bool isSky)
+        private static Vec3 TraceFull(Scene scene, Ray r, int mirrorDepthIgnored, int diffuseDepthIgnored, ref RaytraceSampler.Rng rng, float screenU, float screenV, out bool isSky, out PrimaryGBuffer primary)
         {
             const int MaxStack = 16;
             PathWorkItem[] stack = new PathWorkItem[MaxStack];
@@ -269,6 +454,8 @@ namespace ConsoleGame.RayTracing
             Vec3 radiance = Vec3.Zero;
             bool primaryHitSomething = false;
             isSky = false;
+            bool gbufValid = false;
+            primary = new PrimaryGBuffer { Albedo = Vec3.Zero, Normal = Vec3.Zero, Depth = float.MaxValue };
             HitRecord rec = default;
             float sigmaRad = DiffuseSigmaDeg * (MathF.PI / 180.0f);
             while (sp > 0)
@@ -289,6 +476,11 @@ namespace ConsoleGame.RayTracing
                         if (item.IsPrimary && !primaryHitSomething)
                         {
                             isSky = true;
+                            if (!gbufValid)
+                            {
+                                primary = new PrimaryGBuffer { Albedo = Vec3.Zero, Normal = Vec3.Zero, Depth = float.MaxValue };
+                                gbufValid = true;
+                            }
                         }
                         radiance += new Vec3(beta.X * sky.X, beta.Y * sky.Y, beta.Z * sky.Z);
                         break;
@@ -297,6 +489,12 @@ namespace ConsoleGame.RayTracing
                     {
                         primaryHitSomething = true;
                         isSky = false;
+                        if (!gbufValid)
+                        {
+                            Vec3 baseAlb = SampleAlbedo(rec.Mat, rec.P, rec.N, rec.U, rec.V);
+                            primary = new PrimaryGBuffer { Albedo = baseAlb, Normal = rec.N, Depth = rec.T };
+                            gbufValid = true;
+                        }
                         item.IsPrimary = false;
                     }
                     if (rec.Mat.Emission.X != 0.0 || rec.Mat.Emission.Y != 0.0 || rec.Mat.Emission.Z != 0.0)
@@ -421,6 +619,108 @@ namespace ConsoleGame.RayTracing
             return radiance;
         }
 
+        private static Fast2D<Vec3> ApplyAtrousDenoise(
+            Fast2D<Vec3> src,
+            Fast2D<Vec3> albedo,
+            Fast2D<Vec3> normal,
+            Fast2D<float> depth,
+            Fast2D<bool> sky,
+            Fast2D<Vec3> scratchA,
+            Fast2D<Vec3> scratchB,
+            int iterations = 3,
+            float cPhi = 3.0f,
+            float nPhi = 0.35f,
+            float zPhi = 2.0f,
+            float aPhi = 0.20f)
+        {
+            int w = src.Width;
+            int h = src.Height;
+            if (albedo.Width != w || albedo.Height != h) return src;
+            if (normal.Width != w || normal.Height != h) return src;
+            if (depth.Width != w || depth.Height != h) return src;
+            if (sky != null && (sky.Width != w || sky.Height != h)) return src;
+            if (scratchA == null || scratchA.Width != w || scratchA.Height != h) scratchA = new Fast2D<Vec3>(w, h);
+            if (scratchB == null || scratchB.Width != w || scratchB.Height != h) scratchB = new Fast2D<Vec3>(w, h);
+
+            // 5-tap B3-spline kernel
+            float[] k = new float[5] { 1f / 16f, 1f / 4f, 3f / 8f, 1f / 4f, 1f / 16f };
+
+            Fast2D<Vec3> cur = src;
+            Fast2D<Vec3> dst = scratchA;
+
+            for (int it = 0; it < Math.Max(1, iterations); it++)
+            {
+                int step = 1 << it;
+
+                for (int y = 0; y < h; y++)
+                {
+                    for (int x = 0; x < w; x++)
+                    {
+                        if (sky != null && sky[x, y]) { dst[x, y] = cur[x, y]; continue; }
+
+                        Vec3 c0 = cur[x, y];
+                        Vec3 a0 = albedo[x, y];
+                        Vec3 n0 = normal[x, y].Normalized();
+                        float z0 = depth[x, y];
+
+                        float wsum = 0.0f;
+                        Vec3 accum = Vec3.Zero;
+
+                        for (int ky = -2; ky <= 2; ky++)
+                        {
+                            int sy = y + ky * step;
+                            if (sy < 0) sy = 0; else if (sy >= h) sy = h - 1;
+                            float wy = k[ky + 2];
+                            for (int kx = -2; kx <= 2; kx++)
+                            {
+                                int sx = x + kx * step;
+                                if (sx < 0) sx = 0; else if (sx >= w) sx = w - 1;
+                                if (sky != null && sky[sx, sy] != (sky[x, y])) continue;
+                                float wx = k[kx + 2];
+                                float wBase = wx * wy;
+
+                                Vec3 c = cur[sx, sy];
+                                Vec3 a = albedo[sx, sy];
+                                Vec3 n = normal[sx, sy].Normalized();
+                                float z = depth[sx, sy];
+
+                                float lum0 = 0.2126f * c0.X + 0.7152f * c0.Y + 0.0722f * c0.Z;
+                                float lum = 0.2126f * c.X + 0.7152f * c.Y + 0.0722f * c.Z;
+                                float dl = MathF.Abs(lum - lum0);
+                                float dn = MathF.Max(0.0f, 1.0f - n0.Dot(n));
+                                float dz = MathF.Abs(z - z0);
+                                float da = MathF.Abs(a.X - a0.X) + MathF.Abs(a.Y - a0.Y) + MathF.Abs(a.Z - a0.Z);
+
+                                float wc = MathF.Exp(-dl / MathF.Max(1e-6f, cPhi));
+                                float wn = MathF.Exp(-dn / MathF.Max(1e-6f, nPhi));
+                                float wz = MathF.Exp(-dz / MathF.Max(1e-6f, zPhi));
+                                float wa = MathF.Exp(-(da) / MathF.Max(1e-6f, aPhi));
+
+                                float wght = wBase * wc * wn * wz * wa;
+                                accum = new Vec3(accum.X + c.X * wght, accum.Y + c.Y * wght, accum.Z + c.Z * wght);
+                                wsum += wght;
+                            }
+                        }
+
+                        if (wsum > 1e-8f)
+                        {
+                            float inv = 1.0f / wsum;
+                            dst[x, y] = new Vec3(accum.X * inv, accum.Y * inv, accum.Z * inv);
+                        }
+                        else
+                        {
+                            dst[x, y] = c0;
+                        }
+                    }
+                }
+
+                // swap
+                var tmp = cur; cur = dst; dst = (tmp == scratchA) ? scratchB : scratchA;
+            }
+
+            return cur;
+        }
+
         private static Vec3 SampleAlbedo(Material mat, Vec3 pos, Vec3 normal, float u, float v)
         {
             if (mat.DiffuseTexture == null || mat.TextureWeight <= 0.0)
@@ -456,6 +756,13 @@ namespace ConsoleGame.RayTracing
 
         private static Vec3 ComputeTransmittanceToLight(Scene scene, Ray shadow, float maxDist, float screenU, float screenV)
         {
+            // In large voxel worlds we only need binary occlusion for direct lighting.
+            // This avoids edge cases where transmissive handling might mask occluders.
+            if (scene is ConsoleGame.RayTracing.Scenes.VolumeScene)
+            {
+                bool blocked = scene.Occluded(shadow, maxDist, screenU, screenV);
+                return blocked ? Vec3.Zero : new Vec3(1.0f, 1.0f, 1.0f);
+            }
             float transR = 1.0f;
             float transG = 1.0f;
             float transB = 1.0f;

@@ -1,0 +1,51 @@
+# Codex CLI workspace config (example)
+# This file defines local preferences for sandboxing and approvals.
+# Note: Your Codex CLI build must support reading .codex/codex.yaml.
+
+version: 1
+
+# Approval policy
+approvals:
+  # Keep interactive prompts for privileged ops, but allow safe reads.
+  mode: on-request
+
+  # Auto-approve common read-only shell commands so they don’t prompt.
+  allowlist:
+    powershell:
+      # Auto-approve common read-only PowerShell cmdlets on Windows
+      cmdlets:
+        - Get-ChildItem
+        - Get-Content
+        - Select-String
+        - Resolve-Path
+        - Test-Path
+        - type
+        - cat
+        - ls
+      patterns:
+        - "^powershell(\\.exe)?(\\s|$)"
+        - "-Command\\s+\\\"?(Get-ChildItem|Get-Content|Select-String|Resolve-Path|Test-Path|type|cat|ls)\\b"
+    shell:
+      # Exact command names that are considered read-only.
+      commands:
+        - rg
+        - sed
+        - type
+        - Get-ChildItem
+        - ls
+        - cat
+      # Optional regex patterns for more granular matching.
+      patterns:
+        - "^rg(\s|$)"
+        - "^sed(\s|$)"
+        - "^type(\s|$)"
+        - "^Get-ChildItem(\s|$)"
+        - "^ls(\s|$)"
+        - "^cat(\s|$)"
+
+# Sandboxing (kept conservative)
+filesystem:
+  sandbox: workspace-write
+
+network:
+  sandbox: restricted

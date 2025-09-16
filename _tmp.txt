@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -324,95 +324,6 @@ namespace ConsoleGame.RayTracing.Scenes
             }
         }
 
-        // --- Embedded resolution ---
-        private void ResolveIfEmbedded()
-        {
-            if (!IsLikelyEmbedded()) return;
-
-            // Search for nearest exit to air in 6 axes from eye/torso heights
-            Vec3[] dirs = new Vec3[]
-            {
-                new Vec3( 1, 0,  0), new Vec3(-1, 0,  0),
-                new Vec3( 0, 0,  1), new Vec3( 0, 0, -1),
-                new Vec3( 0, 1,  0), new Vec3( 0, -1, 0),
-            };
-
-            double eyeY = CameraPos.Y;
-            double torsoY = CameraPos.Y - (EyeHeight * 0.5);
-            float searchR = (float)Math.Max(CollisionRadius * 4.0, (worldConfig != null ? worldConfig.VoxelSize.Y : 1.0) * 4.0);
-
-            bool found = false;
-            double bestT = double.PositiveInfinity;
-            Vec3 bestDir = new Vec3(0.0, 1.0, 0.0);
-
-            for (int i = 0; i < dirs.Length; i++)
-            {
-                Vec3 d = dirs[i];
-                // Eye
-                if (RayDist(new Vec3(CameraPos.X, eyeY, CameraPos.Z), d, 0.0f, searchR, out float tEye))
-                {
-                    if (tEye < bestT)
-                    {
-                        bestT = tEye; bestDir = d; found = true;
-                    }
-                }
-                // Torso
-                if (RayDist(new Vec3(CameraPos.X, torsoY, CameraPos.Z), d, 0.0f, searchR, out float tTorso))
-                {
-                    if (tTorso < bestT)
-                    {
-                        bestT = tTorso; bestDir = d; found = true;
-                    }
-                }
-            }
-
-            if (found && bestT < double.PositiveInfinity)
-            {
-                double eps = Math.Max(0.02, (worldConfig != null ? worldConfig.VoxelSize.Y : 1.0) * 0.02);
-                CameraPos = new Vec3(CameraPos.X + bestDir.X * (bestT + eps),
-                                     CameraPos.Y + bestDir.Y * (bestT + eps),
-                                     CameraPos.Z + bestDir.Z * (bestT + eps));
-
-                // Resolve any residual small overlaps
-                ApplyWallRepulsion(0.0f);
-                ApplyWallRepulsion(0.0f);
-            }
-        }
-
-        private bool IsLikelyEmbedded()
-        {
-            double eyeY = CameraPos.Y;
-            double torsoY = CameraPos.Y - (EyeHeight * 0.5);
-            return IsLikelyEmbeddedAtY(eyeY) || IsLikelyEmbeddedAtY(torsoY);
-        }
-
-        private bool IsLikelyEmbeddedAtY(double y)
-        {
-            float probe = (float)Math.Max(0.05, CollisionRadius * 0.25);
-            Vec3 o = new Vec3(CameraPos.X, y, CameraPos.Z);
-            bool xPos = RayHitWithin(o, new Vec3(1, 0, 0), probe);
-            bool xNeg = RayHitWithin(o, new Vec3(-1, 0, 0), probe);
-            bool zPos = RayHitWithin(o, new Vec3(0, 0, 1), probe);
-            bool zNeg = RayHitWithin(o, new Vec3(0, 0, -1), probe);
-            return (xPos && xNeg) && (zPos && zNeg);
-        }
-
-        private bool RayHitWithin(Vec3 origin, Vec3 dir, float tMax)
-        {
-            HitRecord rec = default;
-            Ray r = new Ray(origin, dir);
-            return Hit(r, 0.0f, tMax, ref rec, 0, 0);
-        }
-
-        private bool RayDist(Vec3 origin, Vec3 dir, float tMin, float tMax, out float t)
-        {
-            HitRecord rec = default;
-            Ray r = new Ray(origin, dir);
-            bool hit = Hit(r, tMin, tMax, ref rec, 0, 0);
-            t = rec.T;
-            return hit;
-        }
-
         // --- Penetration resolution (no bounce) ---
         // Push out of overlap along the surface normal. No accumulated outward velocity; allows sliding.
         private void ApplyWallRepulsion(float dt)
@@ -581,10 +492,7 @@ namespace ConsoleGame.RayTracing.Scenes
                 chunksX: chunksX,
                 chunksY: chunksY,
                 chunksZ: chunksZ,
-                // Increase view distance so sun/moon shadow rays
-                // can actually find occluders within the loaded BVH.
-                // With 32-voxel chunks, 8 => ~256 units radius.
-                viewDistanceChunks: 8,
+                viewDistanceChunks: 4,
                 worldMin: new Vec3(-worldSize / 2, 0, -worldSize / 2),
                 voxelSize: new Vec3(1, 1, 1),
                 worldSeed: 0

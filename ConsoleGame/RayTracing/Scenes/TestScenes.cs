@@ -111,12 +111,29 @@ namespace ConsoleGame.RayTracing.Scenes
                 texMat.UVScale = 0.35;
                 Func<Vec3, Vec3, float, Material> texturedPlane = (p, n, u) => texMat;
                 s.Objects.Add(new Plane(new Vec3(0.0f, 0.0f, -98.0f), new Vec3(0.0f, 0.0f, 1.0f), texturedPlane, 0.02f, 0.00f));
+
+                // Video-textured cube demo: map a video file onto a box
+                var camTex = ConsoleGame.Renderer.Texture.FromVideo("Assets/TestVideo.mp4", requestRGBA: false, singleFrameAdvance: false, playAudio: false);
+                s.HasDynamicTextures = true;
+                Material camMat = new Material(new Vec3(1.0, 1.0, 1.0), 0.02, 0.00, Vec3.Zero);
+                camMat.DiffuseTexture = camTex;
+                camMat.TextureWeight = 1.0;
+                camMat.UVScale = 1.0;
+                Vec3 bMin = new Vec3(-2.2f, 0.4f, -7.8f);
+                Vec3 bMax = bMin + new Vec3(1.2f, 1.2f, 1.2f);
+                s.Objects.Add(new Box(bMin, bMax, (p2, n2, u2) => camMat, 0.02f, 0.00f));
             }
 
             Console.WriteLine("[Museum] Building Volume Grid dioramas...");
             {
                 BuildVolumeDioramaA(s, volumeAnchorA, red, green, blue, mirror, glassClear, pedestal);
                 BuildVolumeDioramaB(s, volumeAnchorB, red, green, blue, gold, pedestal);
+            }
+
+            Console.WriteLine("[Museum] Adding Video Cube diorama (reflection/refraction tests)...");
+            {
+                Vec3 videoDioramaAnchor = new Vec3(9.0f, 0.0f, -60.0f);
+                BuildVideoDiorama(s, videoDioramaAnchor, mirror, glassClear, pedestal);
             }
 
             Console.WriteLine("[Museum] Using a SINGLE giant light...");
@@ -300,6 +317,50 @@ namespace ConsoleGame.RayTracing.Scenes
             s.Lights.Add(new PointLight(minCorner + new Vec3(2.5f, 2.8f, 7.0f), new Vec3(1.0f, 0.95f, 0.9f), 85.0f));
             sw.Stop();
             Console.WriteLine("[Museum] Diorama B added in {0} ms.", sw.ElapsedMilliseconds);
+        }
+
+        private static void BuildVideoDiorama(Scene s, Vec3 basePos, Material mirror, Material glassClear, Material pedestal)
+        {
+            Stopwatch sw = Stopwatch.StartNew();
+            // Platform
+            s.Objects.Add(new Disk(basePos + new Vec3(0.0f, 0.01f, 0.0f), new Vec3(0.0f, 1.0f, 0.0f), 1.7f,
+                Solid(new Vec3(0.90f, 0.90f, 0.92f)), 0.0f, 0.0f));
+
+            // Video-textured cube at center
+            var vidTex = ConsoleGame.Renderer.Texture.FromVideo("Assets/TestVideo.mp4", requestRGBA: false, singleFrameAdvance: false, playAudio: false);
+            s.HasDynamicTextures = true;
+            Material videoMat = new Material(new Vec3(1.0, 1.0, 1.0), 0.02, 0.00, Vec3.Zero);
+            videoMat.DiffuseTexture = vidTex;
+            videoMat.TextureWeight = 1.0;
+            videoMat.UVScale = 1.0;
+            Vec3 cubeC = basePos + new Vec3(0.0f, 0.65f, 0.0f);
+            Vec3 half = new Vec3(0.40f, 0.40f, 0.40f);
+            s.Objects.Add(new Box(cubeC - half, cubeC + half, (p, n, u) => videoMat, 0.02f, 0.00f));
+
+            // Reflective sphere
+            s.Objects.Add(new Sphere(basePos + new Vec3(-0.95f, 0.65f + 0.35f, 0.65f), 0.35f, mirror));
+            // Refractive sphere
+            s.Objects.Add(new Sphere(basePos + new Vec3(0.95f, 0.65f + 0.32f, -0.65f), 0.32f, glassClear));
+
+            // Stands for meshes
+            Vec3 standA = basePos + new Vec3(-0.9f, 0.0f, -0.7f);
+            Vec3 standB = basePos + new Vec3(0.9f, 0.0f, 0.7f);
+            s.Objects.Add(new CylinderY(standA, 0.22f, 0.0f, 0.9f, true, pedestal));
+            s.Objects.Add(new CylinderY(standB, 0.22f, 0.0f, 0.9f, true, pedestal));
+
+            // Reflective mesh (teapot)
+            Material meshMirror = new Material(new Vec3(0.98, 0.98, 0.98), 0.0, 0.85, Vec3.Zero);
+            TryAddMeshAutoGround(s, @"assets\teapot.obj", meshMirror, 0.9f, standA + new Vec3(0.0f, 1.0f, 0.0f));
+
+            // Refractive mesh (bunny)
+            Material meshGlass = new Material(new Vec3(1.0, 1.0, 1.0), 0.0, 0.02, Vec3.Zero, 1.0, 1.5, new Vec3(1.0, 1.0, 1.0));
+            TryAddMeshAutoGround(s, @"assets\stanford-bunny.obj", meshGlass, 0.9f, standB + new Vec3(0.0f, 1.0f, 0.0f));
+
+            // Local light to highlight reflection/refraction
+            s.Lights.Add(new PointLight(basePos + new Vec3(0.0f, 2.0f, 0.0f), new Vec3(1.0f, 0.98f, 0.95f), 140.0f));
+
+            sw.Stop();
+            Console.WriteLine("[Museum] Video Cube diorama added in {0} ms.", sw.ElapsedMilliseconds);
         }
 
         private static void TryAddMeshAutoGround(Scene s, string objPath, Material mat, float scale, Vec3 targetPos)

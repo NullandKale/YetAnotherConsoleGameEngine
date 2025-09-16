@@ -25,6 +25,10 @@ namespace ConsoleGame.RayTracing.Scenes
 
         private BVH bvh;
 
+        // If true, the renderer should invalidate/clear TAA history each frame
+        // because scene shading depends on dynamic video/camera pixels.
+        public bool HasDynamicTextures = false;
+
         // Orbit state (toggle with Y)
         private bool OrbitMode = false;
         private Vec3 OrbitPivot = new Vec3(0.0, 0.0, 0.0);
