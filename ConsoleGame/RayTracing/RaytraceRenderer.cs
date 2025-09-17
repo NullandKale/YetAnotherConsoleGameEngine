@@ -38,7 +38,7 @@ namespace ConsoleGame.RayTracing
         private const float MaxLuminance = 1.0f;
         private const ulong SeedSalt = 0x9E3779B97F4A7C15UL;
 
-        private float taaAlpha = 0.05f;
+        private float taaAlpha = 0.01f;
         private const float MotionTransReset = 0.0025f;
         private const float MotionRotReset = 0.0025f;
 

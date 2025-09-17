@@ -339,7 +339,7 @@ namespace ConsoleGame.RayTracing.Scenes
             Scene s = new Scene();
             s.Ambient = new AmbientLight(new Vec3(1, 1, 1), 0.5f);
 
-            ConsoleGame.Renderer.Texture tex = new ConsoleGame.Renderer.Texture(@"C:\Users\alec\Downloads\IMG_1355.bmp");
+            ConsoleGame.Renderer.Texture tex = new ConsoleGame.Renderer.Texture(@"assets/image.png");
 
             Material texMat = new Material(new Vec3(0.5, 0.5, 0.5), 0.0, 0.0, Vec3.Zero);
             texMat.DiffuseTexture = tex;

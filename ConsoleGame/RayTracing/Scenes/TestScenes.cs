@@ -96,7 +96,7 @@ namespace ConsoleGame.RayTracing.Scenes
 
             Console.WriteLine("[Museum] Adding textured demo sphere and endcap wall...");
             {
-                string texPath = @"C:\Users\alec\Downloads\IMG_1355.bmp";
+                string texPath = @"assets\image.png";
                 Material textured = new Material(new Vec3(1.0, 1.0, 1.0), 0.05, 0.02, Vec3.Zero);
                 textured.DiffuseTexture = new ConsoleGame.Renderer.Texture(texPath);
                 textured.TextureWeight = 1.0;
@@ -113,15 +113,19 @@ namespace ConsoleGame.RayTracing.Scenes
                 s.Objects.Add(new Plane(new Vec3(0.0f, 0.0f, -98.0f), new Vec3(0.0f, 0.0f, 1.0f), texturedPlane, 0.02f, 0.00f));
 
                 // Video-textured cube demo: map a video file onto a box
-                var camTex = ConsoleGame.Renderer.Texture.FromVideo("Assets/TestVideo.mp4", requestRGBA: false, singleFrameAdvance: false, playAudio: false);
-                s.HasDynamicTextures = true;
-                Material camMat = new Material(new Vec3(1.0, 1.0, 1.0), 0.02, 0.00, Vec3.Zero);
-                camMat.DiffuseTexture = camTex;
-                camMat.TextureWeight = 1.0;
-                camMat.UVScale = 1.0;
-                Vec3 bMin = new Vec3(-2.2f, 0.4f, -7.8f);
-                Vec3 bMax = bMin + new Vec3(1.2f, 1.2f, 1.2f);
-                s.Objects.Add(new Box(bMin, bMax, (p2, n2, u2) => camMat, 0.02f, 0.00f));
+
+                if(File.Exists("Assets/TestVideo.mp4"))
+                {
+                    var camTex = ConsoleGame.Renderer.Texture.FromVideo("Assets/TestVideo.mp4", requestRGBA: false, singleFrameAdvance: false, playAudio: false);
+                    s.HasDynamicTextures = true;
+                    Material camMat = new Material(new Vec3(1.0, 1.0, 1.0), 0.02, 0.00, Vec3.Zero);
+                    camMat.DiffuseTexture = camTex;
+                    camMat.TextureWeight = 1.0;
+                    camMat.UVScale = 1.0;
+                    Vec3 bMin = new Vec3(-2.2f, 0.4f, -7.8f);
+                    Vec3 bMax = bMin + new Vec3(1.2f, 1.2f, 1.2f);
+                    s.Objects.Add(new Box(bMin, bMax, (p2, n2, u2) => camMat, 0.02f, 0.00f));
+                }
             }
 
             Console.WriteLine("[Museum] Building Volume Grid dioramas...");
@@ -321,6 +325,11 @@ namespace ConsoleGame.RayTracing.Scenes
 
         private static void BuildVideoDiorama(Scene s, Vec3 basePos, Material mirror, Material glassClear, Material pedestal)
         {
+            if(!File.Exists(("Assets/TestVideo.mp4"))
+            {
+                return;
+            }
+
             Stopwatch sw = Stopwatch.StartNew();
             // Platform
             s.Objects.Add(new Disk(basePos + new Vec3(0.0f, 0.01f, 0.0f), new Vec3(0.0f, 1.0f, 0.0f), 1.7f,

@@ -20,6 +20,9 @@
     <None Update="assets\cow.obj">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
+    <None Update="assets\image.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
     <None Update="assets\stanford-bunny.obj">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>

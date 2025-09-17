@@ -464,52 +464,6 @@ namespace ConsoleGame.RayTracing.Scenes
             s.AddEntity(new OrbitingLightEntity(l1, a, 2.4f, 2.6f, -0.5f, 0.9f));
         }
 
-        private static void AddTexturedPanel(Scene s, Vec3 a, Rng rng)
-        {
-            string[] candidates = new string[]
-            {
-                @"assets\wallpaper1.bmp",
-                @"assets\marble.bmp",
-                @"assets\wood.bmp",
-                @"assets\fabric.bmp"
-            };
-
-            string path = null;
-            foreach (string c in candidates) { if (File.Exists(c)) { path = c; break; } }
-
-            Material mat = new Material(new Vec3(1.0, 1.0, 1.0), 0.02, 0.00, Vec3.Zero);
-            if (path != null)
-            {
-                ConsoleGame.Renderer.Texture tex = new ConsoleGame.Renderer.Texture(path);
-                mat.DiffuseTexture = tex;
-                mat.TextureWeight = 1.0;
-                mat.UVScale = 0.5;
-            }
-            else
-            {
-                mat = new Material(new Vec3(0.92, 0.92, 0.92), 0.02, 0.00, Vec3.Zero);
-            }
-
-            float w = 3.2f, h = 2.2f;
-            s.Add(new XYRect(a.X - w, a.X + w, a.Y + 0.2f, a.Y + 0.2f + h, a.Z - 3.0f, (p, n, u) => mat, 0.0f, 0.0f));
-
-            float fx0 = a.X - w - 0.02f;
-            float fx1 = a.X + w + 0.02f;
-            float fy0 = a.Y + 0.2f - 0.02f;
-            float fy1 = a.Y + 0.2f + h + 0.02f;
-            float z = a.Z - 2.95f;
-
-            s.Add(new XYRect(fx0, fx1, fy0, fy0 + 0.04f, z, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.8, 0.9, 0.6)), 0.0f, 0.0f));
-            s.Add(new XYRect(fx0, fx1, fy1 - 0.04f, fy1, z, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(0.7, 2.7, 3.2)), 0.0f, 0.0f));
-            s.Add(new XYRect(fx0, fx0 + 0.04f, fy0, fy1, z, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(2.2, 2.6, 0.8)), 0.0f, 0.0f));
-            s.Add(new XYRect(fx1 - 0.04f, fx1, fy0, fy1, z, (p, n, u) => new Material(new Vec3(0, 0, 0), 0.0, 0.0, new Vec3(0.8, 2.3, 3.0)), 0.0f, 0.0f));
-
-            PointLight lp = new PointLight(a + new Vec3(0.0f, 2.0f, -1.6f), new Vec3(1.0f, 0.96f, 0.92f), 60.0f);
-            s.Lights.Add(lp);
-            s.AddEntity(new UVWobbleEntity(mat, 0.5, 0.15, 0.7f));
-            s.AddEntity(new PulsingLightEntity(lp, 1.0f, 0.25f, 0.5f));
-        }
-
         private static void AddMeshShowcase(Scene s, Vec3 a, Rng rng)
         {
             TryAddMeshAutoGround(s, @"assets\cow.obj", new Material(new Vec3(1.00, 0.85, 0.57), 0.22, 0.10, Vec3.Zero), 1.0f, a + new Vec3(-2.4f, 0.0f, 0.2f));

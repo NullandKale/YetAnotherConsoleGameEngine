@@ -566,7 +566,7 @@ namespace ConsoleGame.RayTracing.Scenes
     }
     public static class VolumeScenes
     {
-        public static VolumeScene BuildMinecraftLike(string filename = "Assets/Worlds/island.vg")
+        public static VolumeScene BuildMinecraftLike(string filename = "assets/Worlds/island.vg")
         {
             int worldSize = 1024;
             int worldHeight = 256;
