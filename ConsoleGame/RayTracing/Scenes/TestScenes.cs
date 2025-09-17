@@ -325,7 +325,7 @@ namespace ConsoleGame.RayTracing.Scenes
 
         private static void BuildVideoDiorama(Scene s, Vec3 basePos, Material mirror, Material glassClear, Material pedestal)
         {
-            if(!File.Exists(("Assets/TestVideo.mp4"))
+            if(!File.Exists("Assets/TestVideo.mp4"))
             {
                 return;
             }

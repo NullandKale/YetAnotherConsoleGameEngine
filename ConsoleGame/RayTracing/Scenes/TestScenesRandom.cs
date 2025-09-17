@@ -190,7 +190,7 @@ namespace ConsoleGame.RayTracing.Scenes
         private static void PlaceTexturedPanelOnRing(Scene s, Vec3 center, float radius, float angleDeg, Rng rng)
         {
             Vec3 a = AnchorOnRing(center, radius, angleDeg);
-            AddTexturedPanel(s, a, rng);
+            //AddTexturedPanel(s, a, rng);
         }
 
         private static void PlaceMeshShowcaseOnRing(Scene s, Vec3 center, float radius, float angleDeg, Rng rng)
