@@ -16,20 +16,23 @@
     <PackageReference Include="System.Drawing.Common" Version="9.0.8" />
   </ItemGroup>
 
+  <Target Name="EnsureAssetsFolder" BeforeTargets="PrepareForBuild">
+    <MakeDir Directories="Assets" />
+  </Target>
   <ItemGroup>
-    <None Update="assets\cow.obj">
+    <None Update="Assets\cow.obj">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Update="assets\image.png">
+    <None Update="Assets\image.png">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Update="assets\stanford-bunny.obj">
+    <None Update="Assets\stanford-bunny.obj">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Update="assets\teapot.obj">
+    <None Update="Assets\teapot.obj">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Update="assets\xyzrgb_dragon.obj">
+    <None Update="Assets\xyzrgb_dragon.obj">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
   </ItemGroup>
