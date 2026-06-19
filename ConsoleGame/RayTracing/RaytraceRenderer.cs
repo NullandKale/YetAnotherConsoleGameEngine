@@ -1,4 +1,4 @@
-﻿using ConsoleGame.RayTracing.Scenes;
+using ConsoleGame.RayTracing.Scenes;
 using ConsoleGame.Renderer;
 using ConsoleGame.Threads;
 using ConsoleRayTracing;
@@ -20,6 +20,7 @@ namespace ConsoleGame.RayTracing
         private int fbH;
 
         private Fast2D<Chexel> frameBuffer;
+        private Fast2D<Chexel> overrideFrameBuffer;
 
         private long frameCounter = 0;
 
@@ -115,10 +116,39 @@ namespace ConsoleGame.RayTracing
             this.fovDeg = fovDeg;
         }
 
+        public void SetOverrideFramebuffer(Fast2D<Chexel> overrideFb)
+        {
+            if (overrideFb == null) throw new ArgumentNullException(nameof(overrideFb));
+            overrideFrameBuffer = overrideFb;
+        }
+
+        public void ClearOverrideFramebuffer()
+        {
+            overrideFrameBuffer = null;
+        }
+
         Fast2D<Vec3> currentHdr = null;
 
         public void TryFlipAndBlit(Framebuffer fb)
         {
+            if (overrideFrameBuffer != null)
+            {
+                if (overrideFrameBuffer.Width != fbW || overrideFrameBuffer.Height != fbH) throw new InvalidOperationException("Override framebuffer dimensions must match current framebuffer size.");
+                threadpool.For(0, procCount, worker =>
+                {
+                    int yStart = worker * fbH / procCount;
+                    int yEnd = (worker + 1) * fbH / procCount;
+                    for (int cy = yStart; cy < yEnd; cy++)
+                    {
+                        for (int cx = 0; cx < fbW; cx++)
+                        {
+                            fb.SetChexel(cx, cy, overrideFrameBuffer[cx, cy]);
+                        }
+                    }
+                });
+                return;
+            }
+
             float aspect = hiW / (float)hiH;
 
             Vec3 camPosSnapshot;
@@ -143,17 +173,11 @@ namespace ConsoleGame.RayTracing
 
             var target = frameBuffer;
 
-            threadpool.For(0, procCount, worker =>
+            pixelPool.For2D(hiW, hiH, (px, py, threadId) =>
             {
-                int yStart = worker * hiH / procCount;
-                int yEnd = (worker + 1) * hiH / procCount;
-                for (int py = yStart; py < yEnd; py++)
-                {
-                    for (int px = 0; px < hiW; px++)
-                    {
-                        rays[px, py] = MakeJitteredRay(camPosSnapshot, yawSnapshot, pitchSnapshot, fovDeg, aspect, px, py, hiW, hiH, jitterRotX, jitterRotY, frameIdx);
-                    }
-                }
+                RaytraceSampler.Rng rng = new RaytraceSampler.Rng(RaytraceSampler.PerFrameSeed(px, py, frame, 0, 0, SeedSalt));
+                // generate jittered ray
+                rays[px, py] = MakeJitteredRay(camPosSnapshot, yawSnapshot, pitchSnapshot, fovDeg, aspect, px, py, hiW, hiH, jitterRotX, jitterRotY, frameIdx);
             });
 
             if (currentHdr == null || currentHdr.Width != hiW || currentHdr.Height != hiH)
@@ -179,40 +203,30 @@ namespace ConsoleGame.RayTracing
             int step = Math.Max(2, ss * 2);
             toneMapper.UpdateExposure(blendedHdr, skyMask, step);
 
-            threadpool.For(0, procCount, worker =>
+            pixelPool.For2D(fbW, fbH, (cx, cy, threadId) =>
             {
-                int yStart = worker * fbH / procCount;
-                int yEnd = (worker + 1) * fbH / procCount;
-                for (int cy = yStart; cy < yEnd; cy++)
+                int yTopPx0 = cy * 2 * ss;
+                int yBotPx0 = (cy * 2 + 1) * ss;
+                for (int sx = 0; sx < ss; sx++)
                 {
-                    int yTopPx0 = cy * 2 * ss;
-                    int yBotPx0 = (cy * 2 + 1) * ss;
-                    for (int cx = 0; cx < fbW; cx++)
+                    int xPx0 = cx * ss;
+                    Vec3 topSum = Vec3.Zero;
+                    Vec3 botSum = Vec3.Zero;
+                    for (int sy = 0; sy < ss; sy++)
                     {
-                        int xPx0 = cx * ss;
-                        Vec3 topSum = Vec3.Zero;
-                        Vec3 botSum = Vec3.Zero;
-                        for (int sy = 0; sy < ss; sy++)
-                        {
-                            int yTop = yTopPx0 + sy;
-                            int yBot = yBotPx0 + sy;
-                            for (int sx = 0; sx < ss; sx++)
-                            {
-                                int x = xPx0 + sx;
-                                topSum = topSum + blendedHdr[x, yTop];
-                                botSum = botSum + blendedHdr[x, yBot];
-                            }
-                        }
-                        float inv = 1.0f / (ss * ss);
-                        Vec3 topAvg = new Vec3(topSum.X * inv, topSum.Y * inv, topSum.Z * inv);
-                        Vec3 botAvg = new Vec3(botSum.X * inv, botSum.Y * inv, botSum.Z * inv);
-
-                        Vec3 topSDR = toneMapper.MapPixel(topAvg);
-                        Vec3 botSDR = toneMapper.MapPixel(botAvg);
-
-                        target[cx, cy] = new Chexel('▀', topSDR, botSDR);
-                        fb.SetChexel(cx, cy, target[cx, cy]);
+                        int yTop = yTopPx0 + sy;
+                        int yBot = yBotPx0 + sy;
+                        int x = xPx0 + sx;
+                        topSum = topSum + blendedHdr[x, yTop];
+                        botSum = botSum + blendedHdr[x, yBot];
                     }
+                    float inv = 1.0f / (ss * ss);
+                    Vec3 topAvg = new Vec3(topSum.X * inv, topSum.Y * inv, topSum.Z * inv);
+                    Vec3 botAvg = new Vec3(botSum.X * inv, botSum.Y * inv, botSum.Z * inv);
+                    Vec3 topSDR = toneMapper.MapPixel(topAvg);
+                    Vec3 botSDR = toneMapper.MapPixel(botAvg);
+                    target[cx, cy] = new Chexel('▀', topSDR, botSDR);
+                    fb.SetChexel(cx, cy, target[cx, cy]);
                 }
             });
 

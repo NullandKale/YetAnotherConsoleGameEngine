@@ -55,16 +55,6 @@
             public static int ConiferBaseRadius = 3;
         }
 
-        public static class Plants
-        {
-            public static float LushFlowerChance = 0.00010f;
-            public static float LushGrassChance = 0.00040f;
-            public static float MoistFlowerChance = 0.00004f;
-            public static float MoistGrassChance = 0.00030f;
-            public static float SemiAridFlowerChance = 0.00001f;
-            public static float SemiAridGrassChance = 0.00015f;
-        }
-
         public static class Caves
         {
             public static float ThresholdBase = 0.60f;
@@ -96,31 +86,12 @@
             public static float DetailBaseFreq = 0.009f;
             public static float ExtraNoiseAmp = 0.06f;
             public static float ExtraNoiseBaseFreq = 0.012f;
-            public static float RiverCarveStrength = 0.05f;
             public static float OceanBiasStrength = 0.12f;
             public static float OceanBiasMaxContinent = 0.50f;
-            public static float RiverEdgeMinForHeight = 0.003f;
-            public static float RiverEdgeMaxForHeight = 0.010f;
-            public static float RiverBandPowerForHeight = 4.0f;
         }
 
         public static class Water
         {
-            public static float RiverFreq = 0.00085f;
-            public static float RiverWarp1 = 23.0f;
-            public static float RiverWarp2 = 19.0f;
-            public static float RiverInputFreqX1 = 0.0011f;
-            public static float RiverInputFreqZ1 = 0.0011f;
-            public static float RiverInputFreqX2 = 0.0009f;
-            public static float RiverInputFreqZ2 = 0.0013f;
-            public static float RiverSmoothEdgeMin = 0.03f;
-            public static float RiverSmoothEdgeMax = 0.08f;
-            public static float RiverActiveThreshold = 0.92f;
-            public static float RiverBandPower = 6.0f;
-            public static int RiverTargetWidthBlocks = 8;
-            public static int RiverBedDepthBase = 3;
-            public static int RiverBedDepthRandMask = 1;
-            public static int RiverWaterDepth = 2;
             public static int LakeOctaves = 3;
             public static float LakeBaseFreq = 0.0005f;
             public static float LakeBias = -0.35f;

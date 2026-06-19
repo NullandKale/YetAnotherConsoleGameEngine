@@ -22,13 +22,6 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
     {
         int EffectiveSeaLevel(in WorldContext ctx);
         int WaterSurfaceLevelAt(int gx, int gz, int groundHeight, in WorldContext ctx);
-        float RiverMask01(int x, int z, in WorldContext ctx);
-        float RiverMask01ForHeight(int x, int z, in WorldContext ctx);
-        float RiverCenterSignal(int x, int z, in WorldContext ctx);
-        bool InRiverCoreBand(int x, int z, int targetWidthBlocks, in WorldContext ctx);
-        int LakeTableHeight(int x, int z, in WorldContext ctx);
-        int RiverBedY(int gx, int gz, int groundHeight, in WorldContext ctx);
-        int RiverSurfaceY(int gx, int gz, int groundHeight, int localWater, int riverBedY, in WorldContext ctx);
     }
 
     public interface IBiomeLayering
@@ -109,10 +102,6 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
             int[,] hCache = new int[size, size];
             int[,] wCache = new int[size, size];
             float[,] moistCache = new float[size, size];
-            float[,] riverMaskCache = new float[size, size];
-            bool[,] riverCoreCache = new bool[size, size];
-            int[,] riverBedYCache = new int[size, size];
-            int[,] riverSurfYCache = new int[size, size];
 
             for (int lx = 0; lx < size; lx++)
             {
@@ -121,18 +110,10 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
                 {
                     int gz = baseZ + lz;
                     int h = _pipeline.Height.ComputeHeight(gx, gz, ctx);
-                    float rMask = _pipeline.Hydro.RiverMask01(gx, gz, ctx);
-                    int riverBedY = _pipeline.Hydro.RiverBedY(gx, gz, h, ctx);
                     int w = _pipeline.Hydro.WaterSurfaceLevelAt(gx, gz, h, ctx);
-                    bool inCore = _pipeline.Hydro.InRiverCoreBand(gx, gz, WorldGenSettings.Water.RiverTargetWidthBlocks, ctx);
-                    int coreSurf = _pipeline.Hydro.RiverSurfaceY(gx, gz, h, w, riverBedY, ctx);
                     hCache[lx, lz] = h;
                     wCache[lx, lz] = w;
                     moistCache[lx, lz] = Moisture01(gx, gz, ctx);
-                    riverMaskCache[lx, lz] = rMask;
-                    riverCoreCache[lx, lz] = inCore;
-                    riverBedYCache[lx, lz] = riverBedY;
-                    riverSurfYCache[lx, lz] = coreSurf;
                 }
             }
 
@@ -144,10 +125,6 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
                     int gz = baseZ + lz;
                     int groundHeight = hCache[lx, lz];
                     int localWater = wCache[lx, lz];
-                    bool riverCore = riverCoreCache[lx, lz];
-                    int riverBedY = riverBedYCache[lx, lz];
-                    int riverSurfY = riverSurfYCache[lx, lz];
-                    bool riverHasWater = riverCore && riverSurfY > riverBedY;
 
                     for (int ly = 0; ly < size; ly++)
                     {
@@ -160,16 +137,6 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
                         }
                         else
                         {
-                            if (riverCore)
-                            {
-                                if (gy == riverBedY) { cells[lx, ly, lz] = (WorldGenSettings.Blocks.Sand, 0); if (cells[lx, ly, lz].Item1 != 0) anySolid = true; continue; }
-                                if (gy > riverBedY && gy <= groundHeight)
-                                {
-                                    if (riverHasWater && gy <= riverSurfY) { cells[lx, ly, lz] = (WorldGenSettings.Blocks.Water, 0); if (cells[lx, ly, lz].Item1 != 0) anySolid = true; continue; }
-                                    else { cells[lx, ly, lz] = (WorldGenSettings.Blocks.Air, 0); continue; }
-                                }
-                            }
-
                             if (gy == groundHeight)
                             {
                                 block = _pipeline.Layering.ChooseSurfaceBlock(groundHeight, localWater, moistCache[lx, lz], ctx);
@@ -200,8 +167,6 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
                     }
                 }
             }
-
-            _pipeline.Flora.TryPlaceFeaturesInChunk(cx, cy, cz, cfg, hCache, wCache, moistCache, riverCoreCache, cells, ref anySolid);
         }
 
         public (int, int) GetBlockAt(int gx, int gy, int gz, WorldConfig cfg)
@@ -210,10 +175,6 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
             int height = _pipeline.Height.ComputeHeight(gx, gz, ctx);
             int localWater = _pipeline.Hydro.WaterSurfaceLevelAt(gx, gz, height, ctx);
             float moisture = Moisture01(gx, gz, ctx);
-            bool riverCore = _pipeline.Hydro.InRiverCoreBand(gx, gz, WorldGenSettings.Water.RiverTargetWidthBlocks, ctx);
-            int riverBedY = _pipeline.Hydro.RiverBedY(gx, gz, height, ctx);
-            int riverSurfY = _pipeline.Hydro.RiverSurfaceY(gx, gz, height, localWater, riverBedY, ctx);
-            bool riverHasWater = riverCore && riverSurfY > riverBedY;
 
             (int mat, int meta) block;
             if (gy > height)
@@ -222,16 +183,6 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
             }
             else
             {
-                if (riverCore)
-                {
-                    if (gy == riverBedY) return (WorldGenSettings.Blocks.Sand, 0);
-                    if (gy > riverBedY && gy <= height)
-                    {
-                        if (riverHasWater && gy <= riverSurfY) return (WorldGenSettings.Blocks.Water, 0);
-                        return (WorldGenSettings.Blocks.Air, 0);
-                    }
-                }
-
                 if (gy == height)
                 {
                     block = _pipeline.Layering.ChooseSurfaceBlock(height, localWater, moisture, ctx);

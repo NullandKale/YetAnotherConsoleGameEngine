@@ -15,9 +15,7 @@
             float ridged = GenMath.RidgedFBM2D(wx1, wz1, WorldGenSettings.Heightmap.RidgedOctaves, WorldGenSettings.Heightmap.RidgedLacunarity, WorldGenSettings.Heightmap.RidgedGain, WorldGenSettings.Heightmap.RidgedBaseFreq, ctx.Seed + 200);
             ridged = GenMath.Saturate(ridged);
             float detail = GenMath.FBM2D(wx1, wz1, WorldGenSettings.Heightmap.DetailOctaves, 2.0f, 0.5f, WorldGenSettings.Heightmap.DetailBaseFreq, ctx.Seed + 300) * 0.5f + 0.5f;
-            float riverMask = DefaultHydrologyModel.RiverMask01ForHeightStatic(x, z, ctx);
             float h01 = 0.42f * cont + 0.40f * ridged + 0.18f * detail;
-            h01 = MathF.Max(0.0f, h01 - WorldGenSettings.Heightmap.RiverCarveStrength * riverMask);
             h01 += WorldGenSettings.Heightmap.ExtraNoiseAmp * (GenMath.FBM2D(wx1, wz1, 2, 2.0f, 0.5f, WorldGenSettings.Heightmap.ExtraNoiseBaseFreq, ctx.Seed + 444) - 0.5f);
             float oceanBias = WorldGenSettings.Heightmap.OceanBiasStrength * (1.0f - GenMath.SmoothStep(0.0f, WorldGenSettings.Heightmap.OceanBiasMaxContinent, cont));
             h01 = MathF.Max(0.0f, h01 - oceanBias);

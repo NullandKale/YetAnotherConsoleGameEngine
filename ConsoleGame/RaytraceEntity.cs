@@ -4,6 +4,7 @@ using ConsoleGame.RayTracing.Objects;
 using ConsoleGame.RayTracing.Scenes;
 using ConsoleGame.RayTracing;
 using ConsoleGame.Renderer;
+using ConsoleGame.RayTracing.Scenes.WorldGeneration;
 using System;
 using System.Collections.Generic;
 
@@ -15,6 +16,8 @@ public partial class RaytraceEntity : BaseComponent
         void SetFov(float fovDeg);
         void TryFlipAndBlit(Framebuffer fb);
         void Resize(Framebuffer fb, int superSample);
+        void SetOverrideFramebuffer(Fast2D<Chexel> overrideFb);
+        void ClearOverrideFramebuffer();
     }
 
     private sealed class RaytraceWrapper : IConsoleRenderer
@@ -25,6 +28,8 @@ public partial class RaytraceEntity : BaseComponent
         public void SetFov(float fovDeg) { inner.SetFov(fovDeg); }
         public void TryFlipAndBlit(Framebuffer fb) { inner.TryFlipAndBlit(fb); }
         public void Resize(Framebuffer fb, int superSample) { inner.Resize(fb, superSample); }
+        public void SetOverrideFramebuffer(Fast2D<Chexel> overrideFb) { inner.SetOverrideFramebuffer(overrideFb); }
+        public void ClearOverrideFramebuffer() { inner.ClearOverrideFramebuffer(); }
     }
 
     private sealed class VideoWrapper : IConsoleRenderer
@@ -47,9 +52,14 @@ public partial class RaytraceEntity : BaseComponent
             inner.Dispose();
             inner = factory(fb, superSample);
         }
+
+        public void SetOverrideFramebuffer(Fast2D<Chexel> overrideFb) { /* no-op in video mode */ }
+        public void ClearOverrideFramebuffer() { /* no-op in video mode */ }
     }
 
     private enum RenderMode { Raytrace, Video }
+
+    private const int NoiseMapCount = 9;
 
     private readonly Terminal terminal;
     private Framebuffer fb;
@@ -71,6 +81,10 @@ public partial class RaytraceEntity : BaseComponent
     private bool camRequestRGBA = false;
     private bool camSingleFrameAdvance = false;
     private float camForcedAspect = 1.77f;
+
+    // Noise override cycling state
+    private int noiseMapIndex = -1;
+    private bool noiseOverrideActive = false;
 
     public RaytraceEntity(Terminal terminal, BaseEntity entity, int superSample)
     {
@@ -171,6 +185,29 @@ public partial class RaytraceEntity : BaseComponent
             return;
         }
 
+        // Cycle noise debug maps with K/L; ensure raytrace mode and apply override Chexel framebuffer
+        if (keyInfo.Key == ConsoleKey.K)
+        {
+            EnsureRaytraceMode();
+            noiseMapIndex = (noiseMapIndex + 1 + NoiseMapCount) % NoiseMapCount;
+            ApplyNoiseOverride();
+            return;
+        }
+
+        if (keyInfo.Key == ConsoleKey.L)
+        {
+            EnsureRaytraceMode();
+            noiseMapIndex = (noiseMapIndex - 1 + NoiseMapCount) % NoiseMapCount;
+            ApplyNoiseOverride();
+            return;
+        }
+
+        if (keyInfo.Key == ConsoleKey.OemMinus)
+        {
+            EnsureRaytraceMode();
+            ClearNoiseOverride();
+        }
+
         if (keyInfo.Key == ConsoleKey.I)
         {
             if (sceneSwitchCooldown <= 0.0f)
@@ -206,7 +243,7 @@ public partial class RaytraceEntity : BaseComponent
 
     public string GetInfoString()
     {
-        return $"pos=({activeScene.CameraPos.X:0.###},{activeScene.CameraPos.Y:0.###},{activeScene.CameraPos.Z:0.###}) yaw={activeScene.Yaw:0.###} pitch={activeScene.Pitch:0.###} scene={sceneIndex} objs={activeScene.Objects.Count} tris={MeshBVH.counter} res=[{rtWidth},{rtHeight*2}]";
+        return $"pos=({activeScene.CameraPos.X:0.###},{activeScene.CameraPos.Y:0.###},{activeScene.CameraPos.Z:0.###}) yaw={activeScene.Yaw:0.###} pitch={activeScene.Pitch:0.###} scene={sceneIndex} objs={activeScene.Objects.Count} tris={MeshBVH.counter} res=[{rtWidth},{rtHeight * 2}]";
     }
 
     public override void Update(double deltaTime)
@@ -233,12 +270,14 @@ public partial class RaytraceEntity : BaseComponent
             renderer.SetFov(src.DefaultFovDeg);
             renderer.SetCamera(activeScene.CameraPos, activeScene.Yaw, activeScene.Pitch);
             activeScene.RebuildBVH();
+            if (noiseOverrideActive) ApplyNoiseOverride();
         }
     }
 
     private void SwitchToCamera(int cameraIndex)
     {
         mode = RenderMode.Video;
+        ClearNoiseOverride();
         Func<Framebuffer, int, VideoRenderer> factory = (newFb, ss) => new VideoRenderer(newFb, cameraIndex, ss, camRequestRGBA, camSingleFrameAdvance, camForcedAspect);
         var vr = factory(fb, rtSuperSample);
         this.renderer = new VideoWrapper(vr, factory);
@@ -254,6 +293,7 @@ public partial class RaytraceEntity : BaseComponent
             this.renderer = new RaytraceWrapper(rt);
             renderer.SetFov(activeScene.DefaultFovDeg);
             renderer.SetCamera(activeScene.CameraPos, this.activeScene.Yaw, this.activeScene.Pitch);
+            if (noiseOverrideActive) ApplyNoiseOverride();
         }
     }
 
@@ -280,6 +320,7 @@ public partial class RaytraceEntity : BaseComponent
         renderer.Resize(fb, rtSuperSample);
         renderer.SetCamera(activeScene.CameraPos, activeScene.Yaw, activeScene.Pitch);
         renderer.SetFov(activeScene.DefaultFovDeg);
+        if (noiseOverrideActive) ApplyNoiseOverride();
     }
 
     private void CreateOrResizeFramebuffer(int width, int height)
@@ -332,5 +373,19 @@ public partial class RaytraceEntity : BaseComponent
         ];
 
         return list.ToArray();
+    }
+
+    private void ApplyNoiseOverride()
+    {
+        if (noiseMapIndex < 0) noiseMapIndex = 0;
+        var chex = NoiseFramebuffers.GetFrameBuffer(noiseMapIndex, fb.Width, fb.Height);
+        renderer.SetOverrideFramebuffer(chex);
+        noiseOverrideActive = true;
+    }
+
+    private void ClearNoiseOverride()
+    {
+        renderer.ClearOverrideFramebuffer();
+        noiseOverrideActive = false;
     }
 }

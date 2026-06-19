@@ -96,7 +96,7 @@ namespace ConsoleGame.RayTracing.Scenes
 
             Console.WriteLine("[Museum] Adding textured demo sphere and endcap wall...");
             {
-                string texPath = @"C:\Users\alec\Downloads\IMG_1355.bmp";
+                string texPath = @"Assets/RGBW-8k.png";
                 Material textured = new Material(new Vec3(1.0, 1.0, 1.0), 0.05, 0.02, Vec3.Zero);
                 textured.DiffuseTexture = new ConsoleGame.Renderer.Texture(texPath);
                 textured.TextureWeight = 1.0;
