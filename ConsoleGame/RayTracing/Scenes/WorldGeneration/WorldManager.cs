@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Threading;
+using System.IO.MemoryMappedFiles;
 using ConsoleGame.RayTracing.Objects;
 using ConsoleGame.RayTracing.Scenes;
 
@@ -75,7 +76,11 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
         // Desired (in-view) chunk keys; we mutate by replacing the instance (safe publish)
         private HashSet<Vec3i> desiredKeys = new HashSet<Vec3i>();
 
-        private enum JobKind { Generate, FromWorldCells }
+        // Persistent state for preloaded worlds (for synchronous streaming)
+        private (int, int)[,,] preloadedWorld = null; // null if not available
+        private int preNx, preNy, preNz;
+
+        private enum JobKind { Generate, FromWorldCells, FromMappedFile }
 
         private sealed class BuildJob
         {
@@ -91,6 +96,8 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
             public Vec3 VoxelSize;
             public int ChunkSize;
             public CountdownEvent Group; // optional barrier for synchronous callers
+            public string FilePath; // for FromMappedFile
+            public long DataOffset; // byte offset to first voxel (after header)
         }
 
         public WorldManager(Scene scene, WorldGenerator generator, WorldConfig config, Func<int, int, Material> materialLookup)
@@ -121,6 +128,7 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
 
         public void ClearLoadedVolumes()
         {
+            // Remove any directly attached objects (legacy path) just in case
             foreach (var vg in volumeGrids)
             {
                 scene.Objects.Remove(vg);
@@ -138,6 +146,9 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
             // Reset desired snapshot
             Volatile.Write(ref desiredKeys, new HashSet<Vec3i>());
             // Do not clear jobQueue; workers will ignore stale work via desired/attached checks.
+
+            // Sync entity layer to geometry and rebuild BVH
+            scene.Update(0.0f);
         }
 
         public void LoadChunksAround(Vec3 center)
@@ -158,6 +169,20 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
 
             // Publish new desired set first so workers see the latest view
             Volatile.Write(ref desiredKeys, newDesired);
+
+            // Sort additions by radial distance from the player's current chunk (load near-first)
+            float scaleX = (float)(config.VoxelSize.X * config.ChunkSize);
+            float scaleZ = (float)(config.VoxelSize.Z * config.ChunkSize);
+            int cxCenter = (int)MathF.Floor((float)((center.X - config.WorldMin.X) / scaleX));
+            int czCenter = (int)MathF.Floor((float)((center.Z - config.WorldMin.Z) / scaleZ));
+            toAdd.Sort((a, b) =>
+            {
+                int dax = a.X - cxCenter; int daz = a.Z - czCenter; int da = dax * dax + daz * daz;
+                int dbx = b.X - cxCenter; int dbz = b.Z - czCenter; int db = dbx * dbx + dbz * dbz;
+                int c = da.CompareTo(db);
+                if (c != 0) return c;
+                return a.Y.CompareTo(b.Y);
+            });
 
             // Attach / enqueue only what changed
             for (int i = 0; i < toAdd.Count; i++)
@@ -195,18 +220,20 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
             }
 
             // Integrate any finished builds from worker threads.
-            bool anyAdded = DrainReadyResults();
-            if (anyAdded || toAdd.Count > 0 || toRemove.Count > 0)
-            {
-                scene.RebuildBVH();
-            }
+            bool anyAdded = false;
+            while (DrainReadyResults()) anyAdded = true;
+            // Do not call scene.Update() here to avoid re-entrancy if invoked during Scene.Update.
+            // The caller (e.g., VolumeScene.Update) will flush entity geometry and rebuild BVH.
         }
 
         private HashSet<Vec3i> BuildDesiredSet(Vec3 center)
         {
             var set = new HashSet<Vec3i>();
-            int cxCenter = (int)MathF.Floor(center.X / config.ChunkSize);
-            int czCenter = (int)MathF.Floor(center.Z / config.ChunkSize);
+            // Map world coordinates to chunk indices (account for worldMin and voxel size)
+            float scaleX = (float)(config.VoxelSize.X * config.ChunkSize);
+            float scaleZ = (float)(config.VoxelSize.Z * config.ChunkSize);
+            int cxCenter = (int)MathF.Floor((float)((center.X - config.WorldMin.X) / scaleX));
+            int czCenter = (int)MathF.Floor((float)((center.Z - config.WorldMin.Z) / scaleZ));
 
             int minCX = cxCenter - config.ViewDistanceChunks;
             int maxCX = cxCenter + config.ViewDistanceChunks;
@@ -235,9 +262,11 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
 
             ClearLoadedVolumes(); // also clears caches to avoid mixing persistent state
 
-            (int, int)[,,] worldCells;
             int nx, ny, nz;
-            using (var br = new BinaryReader(File.OpenRead(filename)))
+            (int, int)[,,] worldCells;
+            Console.WriteLine($"Loading world file: {filename}");
+            using (var fs = File.Open(filename, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var br = new BinaryReader(fs))
             {
                 char c0 = br.ReadChar();
                 char c1 = br.ReadChar();
@@ -245,16 +274,17 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
                 char c3 = br.ReadChar();
                 if (c0 != 'V' || c1 != 'G' || c2 != '0' || c3 != '1')
                     throw new InvalidDataException("Unsupported world file header. Expected 'VG01'.");
-
                 nx = br.ReadInt32();
                 ny = br.ReadInt32();
                 nz = br.ReadInt32();
                 if (nx <= 0 || ny <= 0 || nz <= 0)
                     throw new InvalidDataException("Invalid world dimensions.");
-
+                long expectedBytes = (long)nx * ny * nz * 8L;
+                Console.WriteLine($"Allocating {nx}x{ny}x{nz} ({expectedBytes / (1024*1024)} MB) in memory...");
                 worldCells = new (int, int)[nx, ny, nz];
                 for (int ix = 0; ix < nx; ix++)
                 {
+                    if ((ix & 63) == 0) Console.WriteLine($"Read X: {ix}/{nx}");
                     for (int iy = 0; iy < ny; iy++)
                     {
                         for (int iz = 0; iz < nz; iz++)
@@ -267,39 +297,70 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
                 }
             }
 
+            // Remember preloaded world for synchronous streaming later
+            preloadedWorld = worldCells;
+            preNx = nx; preNy = ny; preNz = nz;
+
             int chunkCountX = (nx + chunkSize - 1) / chunkSize;
             int chunkCountY = (ny + chunkSize - 1) / chunkSize;
             int chunkCountZ = (nz + chunkSize - 1) / chunkSize;
 
+            // Predeclare full desired set (we intend to attach all pregenerated chunks)
+            var fullDesired = new HashSet<Vec3i>(chunkCountX * chunkCountY * chunkCountZ);
+            for (int cx2 = 0; cx2 < chunkCountX; cx2++)
+                for (int cy2 = 0; cy2 < chunkCountY; cy2++)
+                    for (int cz2 = 0; cz2 < chunkCountZ; cz2++)
+                        fullDesired.Add(new Vec3i(cx2, cy2, cz2));
+            Volatile.Write(ref desiredKeys, fullDesired);
+
+            // Determine load origin (use current camera if plausible, else default)
+            Vec3 centerWorld = scene != null ? scene.CameraPos : new Vec3(0, 0, 0);
+            if (double.IsNaN(centerWorld.X) || double.IsNaN(centerWorld.Z) || (centerWorld.X == 0.0 && centerWorld.Z == 0.0))
+            {
+                centerWorld = scene != null ? scene.DefaultCameraPos : new Vec3(0, 0, 0);
+            }
+            int cx0 = (int)MathF.Floor((float)((centerWorld.X - worldMinCorner.X) / (voxelSize.X * chunkSize)));
+            int cz0 = (int)MathF.Floor((float)((centerWorld.Z - worldMinCorner.Z) / (voxelSize.Z * chunkSize)));
+            cx0 = Math.Clamp(cx0, 0, chunkCountX - 1);
+            cz0 = Math.Clamp(cz0, 0, chunkCountZ - 1);
+
+            // Build a priority list of chunk keys sorted by distance from (cx0, cz0)
+            var keys = new List<Vec3i>(fullDesired);
+            keys.Sort((a, b) =>
+            {
+                int dax = a.X - cx0; int daz = a.Z - cz0; int da = dax * dax + daz * daz;
+                int dbx = b.X - cx0; int dbz = b.Z - cz0; int db = dbx * dbx + dbz * dbz;
+                int c = da.CompareTo(db);
+                if (c != 0) return c;
+                // Prefer lower cy first to get ground before sky
+                return a.Y.CompareTo(b.Y);
+            });
+
             int total = chunkCountX * chunkCountY * chunkCountZ;
             using (var group = new CountdownEvent(total))
             {
-                for (int cx = 0; cx < chunkCountX; cx++)
+                for (int i = 0; i < keys.Count; i++)
                 {
-                    for (int cy = 0; cy < chunkCountY; cy++)
-                    {
-                        for (int cz = 0; cz < chunkCountZ; cz++)
-                        {
-                            var key = new Vec3i(cx, cy, cz);
-                            inFlight.TryAdd(key, 0);
-                            EnqueueFileJob(cx, cy, cz, worldCells, nx, ny, nz, worldMinCorner, voxelSize, chunkSize, group);
-                        }
-                    }
+                    var key = keys[i];
+                    inFlight.TryAdd(key, 0);
+                    EnqueueFileJob(key.X, key.Y, key.Z, worldCells, nx, ny, nz, worldMinCorner, voxelSize, chunkSize, group);
                 }
 
                 // Wait for all chunks from file to finish building, integrating as they arrive.
                 while (group.CurrentCount > 0)
                 {
-                    DrainReadyResults();
+                    // Attach as many finished chunks as possible per loop iteration
+                    while (DrainReadyResults()) { }
                     Thread.Sleep(1);
                 }
             }
 
-            // Final drain and BVH rebuild.
-            bool anyAdded = DrainReadyResults();
+            // Final drain and rebuild via Scene.Update to flush Entities -> Objects
+            bool anyAdded = false;
+            while (DrainReadyResults()) anyAdded = true;
             if (anyAdded)
             {
-                scene.RebuildBVH();
+                scene.Update(0.0f);
             }
         }
 
@@ -335,6 +396,132 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
             }
         }
 
+        // Block until all chunks within current view distance around center are attached to the scene.
+        public void EnsureViewLoaded(Vec3 center)
+        {
+            var desired = BuildDesiredSet(center);
+            Volatile.Write(ref desiredKeys, desired);
+
+            // Synchronous attach of desired chunks (no workers, no queue):
+            // - If preloadedWorld exists, slice directly from RAM
+            // - Else, generate on the spot via WorldGenerator
+            foreach (var key in desired)
+            {
+                if (loadedChunkMap.ContainsKey(key)) continue;
+                try
+                {
+                    if (preloadedWorld != null)
+                    {
+                        AttachChunkFromPreloaded(key.X, key.Y, key.Z);
+                    }
+                    else
+                    {
+                        AttachChunkFromGenerator(key.X, key.Y, key.Z);
+                    }
+                }
+                catch { /* ignore single chunk failure to keep going */ }
+            }
+
+            // Sync entity layer into Objects and build BVH
+            scene.Update(0.0f);
+        }
+
+        // Block until ALL chunks in the world are attached to the scene, regardless of view distance.
+        public void EnsureAllChunksLoaded()
+        {
+            int chunkCountX = config.ChunksX;
+            int chunkCountY = config.ChunksY;
+            int chunkCountZ = config.ChunksZ;
+
+            // Desired set = entire world
+            var all = new HashSet<Vec3i>(chunkCountX * chunkCountY * chunkCountZ);
+            for (int cx = 0; cx < chunkCountX; cx++)
+                for (int cy = 0; cy < chunkCountY; cy++)
+                    for (int cz = 0; cz < chunkCountZ; cz++)
+                        all.Add(new Vec3i(cx, cy, cz));
+            Volatile.Write(ref desiredKeys, all);
+
+            // Attach synchronously using preloaded world if present, else generator
+            foreach (var key in all)
+            {
+                if (loadedChunkMap.ContainsKey(key)) continue;
+                try
+                {
+                    if (preloadedWorld != null)
+                        AttachChunkFromPreloaded(key.X, key.Y, key.Z);
+                    else
+                        AttachChunkFromGenerator(key.X, key.Y, key.Z);
+                }
+                catch { }
+            }
+
+            // Flush entity geometry and rebuild BVH
+            scene.Update(0.0f);
+        }
+
+        private void AttachChunkFromPreloaded(int cx, int cy, int cz)
+        {
+            int sx = Math.Min(config.ChunkSize, preNx - cx * config.ChunkSize);
+            int sy = Math.Min(config.ChunkSize, preNy - cy * config.ChunkSize);
+            int sz = Math.Min(config.ChunkSize, preNz - cz * config.ChunkSize);
+            if (sx <= 0 || sy <= 0 || sz <= 0) return;
+
+            var chunkCells = new (int, int)[sx, sy, sz];
+            bool anySolid = false;
+            for (int x = 0; x < sx; x++)
+            {
+                int gx = cx * config.ChunkSize + x;
+                for (int y = 0; y < sy; y++)
+                {
+                    int gy = cy * config.ChunkSize + y;
+                    for (int z = 0; z < sz; z++)
+                    {
+                        int gz = cz * config.ChunkSize + z;
+                        var cell = preloadedWorld[gx, gy, gz];
+                        chunkCells[x, y, z] = cell;
+                        if (cell.Item1 != 0) anySolid = true;
+                    }
+                }
+            }
+            if (!anySolid) return;
+
+            Vec3 minCorner = new Vec3(
+                config.WorldMin.X + cx * config.ChunkSize * config.VoxelSize.X,
+                config.WorldMin.Y + cy * config.ChunkSize * config.VoxelSize.Y,
+                config.WorldMin.Z + cz * config.ChunkSize * config.VoxelSize.Z
+            );
+
+            var vg = new VolumeGrid(chunkCells, minCorner, config.VoxelSize, materialLookup);
+            var key = new Vec3i(cx, cy, cz);
+            loadedChunkMap[key] = vg;
+            volumeGrids.Add(vg);
+            scene.Objects.Add(vg);
+            attached.TryAdd(key, 0);
+        }
+
+        private void AttachChunkFromGenerator(int cx, int cy, int cz)
+        {
+            var cells = new (int, int)[config.ChunkSize, config.ChunkSize, config.ChunkSize];
+            bool anySolid;
+            generator.GenerateChunkCells(cx, cy, cz, config, cells, out anySolid);
+            if (!anySolid) return;
+
+            int baseX = cx * config.ChunkSize;
+            int baseY = cy * config.ChunkSize;
+            int baseZ = cz * config.ChunkSize;
+            Vec3 minCorner = new Vec3(
+                config.WorldMin.X + baseX * config.VoxelSize.X,
+                config.WorldMin.Y + baseY * config.VoxelSize.Y,
+                config.WorldMin.Z + baseZ * config.VoxelSize.Z
+            );
+            var vg = new VolumeGrid(cells, minCorner, config.VoxelSize, materialLookup);
+            var key = new Vec3i(cx, cy, cz);
+            loadedChunkMap[key] = vg;
+            volumeGrids.Add(vg);
+            scene.Objects.Add(vg);
+            attached.TryAdd(key, 0);
+        }
+
         private void EnqueueGenerateJob(int cx, int cy, int cz)
         {
             jobQueue.Enqueue(new BuildJob
@@ -367,6 +554,27 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
             jobSignal.Set();
         }
 
+        private void EnqueueMappedFileJob(int cx, int cy, int cz, string filePath, long dataOffset, int nx, int ny, int nz, Vec3 worldMinCorner, Vec3 voxelSize, int chunkSize, CountdownEvent group)
+        {
+            jobQueue.Enqueue(new BuildJob
+            {
+                Kind = JobKind.FromMappedFile,
+                Cx = cx,
+                Cy = cy,
+                Cz = cz,
+                FilePath = filePath,
+                DataOffset = dataOffset,
+                Nx = nx,
+                Ny = ny,
+                Nz = nz,
+                WorldMinCorner = worldMinCorner,
+                VoxelSize = voxelSize,
+                ChunkSize = chunkSize,
+                Group = group
+            });
+            jobSignal.Set();
+        }
+
         private void WorkerLoop(int workerId)
         {
             while (!Volatile.Read(ref stop))
@@ -384,9 +592,13 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
                     {
                         DoGenerateJob(job.Cx, job.Cy, job.Cz);
                     }
-                    else
+                    else if (job.Kind == JobKind.FromWorldCells)
                     {
                         DoFileJob(job);
+                    }
+                    else
+                    {
+                        DoMappedFileJob(job);
                     }
                 }
                 catch
@@ -504,6 +716,65 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
             readyResults.Enqueue((key, vg));
         }
 
+        private void DoMappedFileJob(BuildJob job)
+        {
+            int cx = job.Cx;
+            int cy = job.Cy;
+            int cz = job.Cz;
+            var key = new Vec3i(cx, cy, cz);
+
+            if (!IsJobStillRelevant(key))
+            {
+                inFlight.TryRemove(key, out _);
+                return;
+            }
+
+            int sx = Math.Min(job.ChunkSize, job.Nx - cx * job.ChunkSize);
+            int sy = Math.Min(job.ChunkSize, job.Ny - cy * job.ChunkSize);
+            int sz = Math.Min(job.ChunkSize, job.Nz - cz * job.ChunkSize);
+
+            var chunkCells = new (int, int)[sx, sy, sz];
+            bool anySolid = false;
+
+            using (var mmf = MemoryMappedFile.CreateFromFile(job.FilePath, FileMode.Open, null, 0, MemoryMappedFileAccess.Read))
+            using (var acc = mmf.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read))
+            {
+                for (int x = 0; x < sx; x++)
+                {
+                    int gx = cx * job.ChunkSize + x;
+                    for (int y = 0; y < sy; y++)
+                    {
+                        int gy = cy * job.ChunkSize + y;
+                        for (int z = 0; z < sz; z++)
+                        {
+                            int gz = cz * job.ChunkSize + z;
+                            long idx = ((long)gx * job.Ny + gy) * job.Nz + gz;
+                            long byteOffset = job.DataOffset + idx * 8L;
+                            int mat = acc.ReadInt32(byteOffset);
+                            int meta = acc.ReadInt32(byteOffset + 4);
+                            chunkCells[x, y, z] = (mat, meta);
+                            if (mat != 0) anySolid = true;
+                        }
+                    }
+                }
+            }
+
+            if (!anySolid)
+            {
+                inFlight.TryRemove(key, out _);
+                return;
+            }
+
+            Vec3 minCorner = new Vec3(
+                job.WorldMinCorner.X + cx * job.ChunkSize * job.VoxelSize.X,
+                job.WorldMinCorner.Y + cy * job.ChunkSize * job.VoxelSize.Y,
+                job.WorldMinCorner.Z + cz * job.ChunkSize * job.VoxelSize.Z
+            );
+
+            var vg = new VolumeGrid(chunkCells, minCorner, job.VoxelSize, materialLookup);
+            readyResults.Enqueue((key, vg));
+        }
+
         private bool DrainReadyResults()
         {
             bool any = false;
@@ -526,9 +797,10 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
                     continue;
                 }
 
-                // Attach to scene
+                // Attach to scene via entity layer
                 volumeGrids.Add(item.vg);
                 loadedChunkMap[item.key] = item.vg;
+
                 scene.Objects.Add(item.vg);
                 attached.TryAdd(item.key, 0);
 
@@ -553,7 +825,7 @@ namespace ConsoleGame.RayTracing.Scenes.WorldGeneration
                 cacheNodes.Remove(key);
             }
 
-            // Attach to scene
+            // Attach to scene via entity layer
             loadedChunkMap[key] = vg;
             volumeGrids.Add(vg);
             scene.Objects.Add(vg);

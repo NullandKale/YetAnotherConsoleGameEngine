@@ -18,10 +18,10 @@ namespace ConsoleGame.RayTracing.Scenes
 
         // Tunables
         private const float EyeHeight = 1.7f;           // eyes above feet
-        private const float GravityAccel = 12.0f;       // softer gravity
+        private const float GravityAccel = 9.81f;       // real-world gravity (m/s^2)
         private const float MaxProbeHeight = 4096.0f;   // safety cap for initial drop
         private const float GroundClearance = 0.10f;    // to avoid z-fighting on ground
-        private const float JumpSpeed = 8.5f;           // jump impulse
+        private const float JumpSpeed = 4.8f;           // >= 1m jump apex with 9.81 m/s^2
         private const float LocalProbeDepthMin = 3.0f;  // min downward probe each frame
         private const float LocalProbeStart = 0.6f;     // start probe slightly above camera
         private const float ProbeRadius = 0.35f;        // radius for 5-ray ground fan
@@ -29,7 +29,7 @@ namespace ConsoleGame.RayTracing.Scenes
         private const float StepUpGuardEpsilon = 0.05f; // prevents upward snap on walls
 
         // Shift = fly (ignore gravity & ground snapping), faster
-        private const float ShiftSpeedMult = 3.0f;
+        private const float ShiftSpeedMult = 30.0f;
         private const float ShiftHoldGraceSeconds = 0.15f; // small timer refreshed by input events
         private float shiftHoldTimer = 0.0f;
 
@@ -50,14 +50,26 @@ namespace ConsoleGame.RayTracing.Scenes
 
         public override void Update(float deltaTimeMS)
         {
-            if (worldManager == null) return;
+            if (worldManager == null)
+            {
+                base.Update(deltaTimeMS);
+                return;
+            }
 
             float dt = deltaTimeMS;
             if (dt < 0.0f) dt = 0.0f;
             dt *= 0.001f;
 
-            // Stream chunks.
+            // Stream chunks first so new geometry is present for this frame's BVH
             worldManager.LoadChunksAround(CameraPos);
+
+            // Update scene entities (e.g., day-night cycle) and timekeeping,
+            // which also flushes entity geometry into Objects and rebuilds BVH when needed.
+            base.Update(deltaTimeMS);
+
+            // If we start this tick embedded in terrain (due to tunneling/edge cases),
+            // search for nearby air and push the camera outside before physics.
+            ResolveIfEmbedded();
 
             // One-time auto placement.
             if (!autoPlaced)
@@ -116,7 +128,7 @@ namespace ConsoleGame.RayTracing.Scenes
 
                 // Post-step correction: if we ended up very near the floor below, snap cleanly.
                 double corrStartY = CameraPos.Y + LocalProbeStart;
-                double corrDepth = LocalProbeStart + 1.0;
+                double corrDepth = LocalProbeStart + 1.5; // slightly deeper snap without auto-step
                 if (TrySampleGroundYFan(CameraPos.X, CameraPos.Z, corrStartY, corrDepth, out double g2))
                 {
                     double f2 = g2 + EyeHeight + GroundClearance;
@@ -183,14 +195,14 @@ namespace ConsoleGame.RayTracing.Scenes
             Vec3 up = new Vec3(0.0, 1.0, 0.0);
 
             // Horizontal moves
-            if (keyInfo.Key == ConsoleKey.W) CameraPos = CameraPos + forwardXZ * (moveSpeed * dt);
-            if (keyInfo.Key == ConsoleKey.S) CameraPos = CameraPos - forwardXZ * (moveSpeed * dt);
-            if (keyInfo.Key == ConsoleKey.A) CameraPos = CameraPos - rightXZ * (moveSpeed * dt);
-            if (keyInfo.Key == ConsoleKey.D) CameraPos = CameraPos + rightXZ * (moveSpeed * dt);
+            if (keyInfo.Key == ConsoleKey.W) AttemptMoveHorizontal(forwardXZ * (moveSpeed * dt));
+            if (keyInfo.Key == ConsoleKey.S) AttemptMoveHorizontal(-forwardXZ * (moveSpeed * dt));
+            if (keyInfo.Key == ConsoleKey.A) AttemptMoveHorizontal(-rightXZ * (moveSpeed * dt));
+            if (keyInfo.Key == ConsoleKey.D) AttemptMoveHorizontal(rightXZ * (moveSpeed * dt));
 
             // Vertical strafe (fly-style up/down). Gravity is ignored in Update while Shift is active.
-            if (keyInfo.Key == ConsoleKey.E) CameraPos = CameraPos + up * (moveSpeed * dt);
-            if (keyInfo.Key == ConsoleKey.Q) CameraPos = CameraPos - up * (moveSpeed * dt);
+            if (keyInfo.Key == ConsoleKey.E) AttemptMoveVertical(moveSpeed * dt);
+            if (keyInfo.Key == ConsoleKey.Q) AttemptMoveVertical(-moveSpeed * dt);
 
             // Jump only in normal (non-Shift-fly) mode and only when grounded.
             if (keyInfo.Key == ConsoleKey.Spacebar && !shiftDown && isGrounded)
@@ -200,65 +212,265 @@ namespace ConsoleGame.RayTracing.Scenes
             }
         }
 
-        // --- Outward wall repulsion implementation ---
-        // Fires short rays around the camera (eye + torso heights). If a wall is closer than
-        // CollisionRadius, accumulate an outward impulse (opposite the ray dir). We integrate a
-        // damped lateral velocity so you gently glide off obstacles instead of sticking.
+        // --- Continuous collision for player movement ---
+        // Subdivides motion into micro-steps and raycasts at torso/eye heights with a 3-ray fan
+        // (center/left/right) to approximate a capsule of radius CollisionRadius. Prevents tunneling
+        // at low framerates or high speeds.
+        private void AttemptMoveHorizontal(Vec3 delta)
+        {
+            double maxStep = Math.Max(0.1, CollisionRadius * 0.35);
+            double remaining = Math.Sqrt(delta.X * delta.X + delta.Z * delta.Z);
+            if (remaining <= 1e-6) return;
+
+            Vec3 dir = new Vec3(delta.X / remaining, 0.0, delta.Z / remaining);
+            Vec3 perp = new Vec3(-dir.Z, 0.0, dir.X); // 90deg in XZ
+
+            while (remaining > 1e-6)
+            {
+                double step = Math.Min(remaining, maxStep);
+                double best = step;
+                bool hadBlockNormal = false;
+                Vec3 blockNormal = new Vec3(0.0, 0.0, 0.0);
+
+                // Sample at two heights: eye and torso
+                double eyeY = CameraPos.Y;
+                double torsoY = CameraPos.Y - (EyeHeight * 0.5);
+
+                // Offsets to approximate capsule radius
+                double r = CollisionRadius;
+                ReadOnlySpan<double> offs = stackalloc double[] { 0.0, r, -r };
+
+                for (int i = 0; i < offs.Length; i++)
+                {
+                    double o = offs[i];
+                    Vec3 offVec = new Vec3(perp.X * o, 0.0, perp.Z * o);
+
+                    // Eye ray
+                    LimitStepByRay(new Vec3(CameraPos.X + offVec.X, eyeY, CameraPos.Z + offVec.Z), dir, ref best, ref hadBlockNormal, ref blockNormal);
+                    // Torso ray
+                    LimitStepByRay(new Vec3(CameraPos.X + offVec.X, torsoY, CameraPos.Z + offVec.Z), dir, ref best, ref hadBlockNormal, ref blockNormal);
+                }
+
+                if (best <= 1e-5)
+                {
+                    // Can't advance; stop horizontal motion this event (no auto step)
+                    break;
+                }
+
+                // Apply step
+                CameraPos = new Vec3(CameraPos.X + dir.X * best,
+                                      CameraPos.Y,
+                                      CameraPos.Z + dir.Z * best);
+                remaining -= best;
+
+                // If blocked before full step, try to slide along the blocking surface
+                double residual = step - best;
+                if (residual > 1e-6 && hadBlockNormal)
+                {
+                    Vec3 slide = ProjectOntoPlaneXZ(dir, blockNormal);
+                    float len = MathF.Sqrt(slide.X * slide.X + slide.Z * slide.Z);
+                    if (len > 1e-6f)
+                    {
+                        dir = new Vec3(slide.X / len, 0.0, slide.Z / len);
+                        remaining += residual; // attempt to use the leftover along slide
+                    }
+                }
+            }
+        }
+
+        // Auto-step removed by request
+
+        private void LimitStepByRay(Vec3 origin, Vec3 dir, ref double best, ref bool hadNormal, ref Vec3 blockNormal)
+        {
+            Ray r = new Ray(origin, dir);
+            HitRecord rec = default;
+            float tmax = (float)(best + 1e-3);
+            if (Hit(r, 0.001f, tmax, ref rec, 0, 0))
+            {
+                double cand = Math.Max(0.0, rec.T - 0.01);
+                if (cand < best)
+                {
+                    best = cand;
+                    hadNormal = true;
+                    blockNormal = rec.N;
+                }
+            }
+        }
+
+        private void AttemptMoveVertical(double dy)
+        {
+            if (Math.Abs(dy) <= 1e-6) return;
+            double remaining = Math.Abs(dy);
+            double stepSign = Math.Sign(dy);
+            double maxStep = Math.Max(0.1, EyeHeight * 0.25);
+            while (remaining > 1e-6)
+            {
+                double step = Math.Min(remaining, maxStep);
+                Vec3 dir = new Vec3(0.0, stepSign, 0.0);
+                Ray r = new Ray(new Vec3(CameraPos.X, CameraPos.Y, CameraPos.Z), dir);
+                HitRecord rec = default;
+                float tmax = (float)(step + 1e-3);
+                if (Hit(r, 0.001f, tmax, ref rec, 0, 0))
+                {
+                    double cand = Math.Max(0.0, rec.T - 0.01);
+                    if (cand <= 1e-5) break;
+                    CameraPos = new Vec3(CameraPos.X, CameraPos.Y + cand * stepSign, CameraPos.Z);
+                }
+                else
+                {
+                    CameraPos = new Vec3(CameraPos.X, CameraPos.Y + step * stepSign, CameraPos.Z);
+                }
+                remaining -= step;
+            }
+        }
+
+        // --- Embedded resolution ---
+        private void ResolveIfEmbedded()
+        {
+            if (!IsLikelyEmbedded()) return;
+
+            // Search for nearest exit to air in 6 axes from eye/torso heights
+            Vec3[] dirs = new Vec3[]
+            {
+                new Vec3( 1, 0,  0), new Vec3(-1, 0,  0),
+                new Vec3( 0, 0,  1), new Vec3( 0, 0, -1),
+                new Vec3( 0, 1,  0), new Vec3( 0, -1, 0),
+            };
+
+            double eyeY = CameraPos.Y;
+            double torsoY = CameraPos.Y - (EyeHeight * 0.5);
+            float searchR = (float)Math.Max(CollisionRadius * 4.0, (worldConfig != null ? worldConfig.VoxelSize.Y : 1.0) * 4.0);
+
+            bool found = false;
+            double bestT = double.PositiveInfinity;
+            Vec3 bestDir = new Vec3(0.0, 1.0, 0.0);
+
+            for (int i = 0; i < dirs.Length; i++)
+            {
+                Vec3 d = dirs[i];
+                // Eye
+                if (RayDist(new Vec3(CameraPos.X, eyeY, CameraPos.Z), d, 0.0f, searchR, out float tEye))
+                {
+                    if (tEye < bestT)
+                    {
+                        bestT = tEye; bestDir = d; found = true;
+                    }
+                }
+                // Torso
+                if (RayDist(new Vec3(CameraPos.X, torsoY, CameraPos.Z), d, 0.0f, searchR, out float tTorso))
+                {
+                    if (tTorso < bestT)
+                    {
+                        bestT = tTorso; bestDir = d; found = true;
+                    }
+                }
+            }
+
+            if (found && bestT < double.PositiveInfinity)
+            {
+                double eps = Math.Max(0.02, (worldConfig != null ? worldConfig.VoxelSize.Y : 1.0) * 0.02);
+                CameraPos = new Vec3(CameraPos.X + bestDir.X * (bestT + eps),
+                                     CameraPos.Y + bestDir.Y * (bestT + eps),
+                                     CameraPos.Z + bestDir.Z * (bestT + eps));
+
+                // Resolve any residual small overlaps
+                ApplyWallRepulsion(0.0f);
+                ApplyWallRepulsion(0.0f);
+            }
+        }
+
+        private bool IsLikelyEmbedded()
+        {
+            double eyeY = CameraPos.Y;
+            double torsoY = CameraPos.Y - (EyeHeight * 0.5);
+            return IsLikelyEmbeddedAtY(eyeY) || IsLikelyEmbeddedAtY(torsoY);
+        }
+
+        private bool IsLikelyEmbeddedAtY(double y)
+        {
+            float probe = (float)Math.Max(0.05, CollisionRadius * 0.25);
+            Vec3 o = new Vec3(CameraPos.X, y, CameraPos.Z);
+            bool xPos = RayHitWithin(o, new Vec3(1, 0, 0), probe);
+            bool xNeg = RayHitWithin(o, new Vec3(-1, 0, 0), probe);
+            bool zPos = RayHitWithin(o, new Vec3(0, 0, 1), probe);
+            bool zNeg = RayHitWithin(o, new Vec3(0, 0, -1), probe);
+            return (xPos && xNeg) && (zPos && zNeg);
+        }
+
+        private bool RayHitWithin(Vec3 origin, Vec3 dir, float tMax)
+        {
+            HitRecord rec = default;
+            Ray r = new Ray(origin, dir);
+            return Hit(r, 0.0f, tMax, ref rec, 0, 0);
+        }
+
+        private bool RayDist(Vec3 origin, Vec3 dir, float tMin, float tMax, out float t)
+        {
+            HitRecord rec = default;
+            Ray r = new Ray(origin, dir);
+            bool hit = Hit(r, tMin, tMax, ref rec, 0, 0);
+            t = rec.T;
+            return hit;
+        }
+
+        // --- Penetration resolution (no bounce) ---
+        // Push out of overlap along the surface normal. No accumulated outward velocity; allows sliding.
         private void ApplyWallRepulsion(float dt)
         {
-            // Exponential damping of existing push velocity
-            float damp = MathF.Exp(-RepelDamping * dt);
-            repelVel = repelVel * damp;
-
-            // Sample directions (8 around the circle)
+            const float eps = 0.01f;
             ReadOnlySpan<(double x, double z)> dirs = stackalloc (double, double)[]
             {
                 ( 1,  0), (-1,  0), ( 0,  1), ( 0, -1),
                 ( 1,  1), ( 1, -1), (-1,  1), (-1, -1),
             };
 
-            // Two heights: eye and torso (helps doorways / ledges)
             double eyeY = CameraPos.Y;
             double torsoY = CameraPos.Y - (EyeHeight * 0.5);
 
-            foreach (var (dx, dz) in dirs)
+            for (int pass = 0; pass < 2; pass++)
             {
-                // Normalize horizontal dir
-                double len = Math.Sqrt(dx * dx + dz * dz);
-                double ux = dx / len;
-                double uz = dz / len;
-
-                // Eye
-                AccumulateRepelAt(new Vec3(CameraPos.X, eyeY, CameraPos.Z), new Vec3(ux, 0.0, uz));
-                // Torso
-                AccumulateRepelAt(new Vec3(CameraPos.X, torsoY, CameraPos.Z), new Vec3(ux, 0.0, uz));
-            }
-
-            // Apply lateral push (Y ignored)
-            CameraPos = new Vec3(CameraPos.X + repelVel.X * dt,
-                                 CameraPos.Y,
-                                 CameraPos.Z + repelVel.Z * dt);
-        }
-
-        private void AccumulateRepelAt(Vec3 origin, Vec3 dirXZ)
-        {
-            Ray r = new Ray(origin, dirXZ); // horizontal ray
-            HitRecord rec = default;
-
-            // Short ray up to the collision radius
-            if (Hit(r, 0.001f, (float)CollisionRadius, ref rec, 0, 0))
-            {
-                // Penetration if the surface is within our "personal space"
-                float pen = CollisionRadius - rec.T;
-                if (pen > 0.0)
+                foreach (var (dx, dz) in dirs)
                 {
-                    // Outward impulse opposite the direction we cast
-                    Vec3 impulse = (-dirXZ) * (RepelImpulse * pen);
-
-                    // Only lateral; keep Y neutral to avoid vertical pops
-                    repelVel = new Vec3(repelVel.X + impulse.X, 0.0, repelVel.Z + impulse.Z);
+                    double len = Math.Sqrt(dx * dx + dz * dz);
+                    Vec3 dirXZ = new Vec3(dx / len, 0.0, dz / len);
+                    ResolvePenetrationAt(new Vec3(CameraPos.X, eyeY, CameraPos.Z), dirXZ, eps);
+                    ResolvePenetrationAt(new Vec3(CameraPos.X, torsoY, CameraPos.Z), dirXZ, eps);
                 }
             }
+        }
+
+        private void ResolvePenetrationAt(Vec3 origin, Vec3 dirXZ, float eps)
+        {
+            Ray r = new Ray(origin, dirXZ);
+            HitRecord rec = default;
+            if (Hit(r, 0.001f, (float)CollisionRadius, ref rec, 0, 0))
+            {
+                float pen = CollisionRadius - rec.T;
+                if (pen > 0.0f)
+                {
+                    Vec3 n = rec.N;
+                    Vec3 nXZ = new Vec3(n.X, 0.0, n.Z);
+                    float nl = MathF.Sqrt(nXZ.X * nXZ.X + nXZ.Z * nXZ.Z);
+                    if (nl > 1e-6f)
+                    {
+                        nXZ = new Vec3(nXZ.X / nl, 0.0, nXZ.Z / nl);
+                        float push = pen + eps;
+                        CameraPos = new Vec3(CameraPos.X + nXZ.X * push,
+                                             CameraPos.Y,
+                                             CameraPos.Z + nXZ.Z * push);
+                    }
+                }
+            }
+        }
+
+        private static Vec3 ProjectOntoPlaneXZ(Vec3 v, Vec3 n)
+        {
+            Vec3 nXZ = new Vec3(n.X, 0.0, n.Z);
+            float nl = MathF.Sqrt(nXZ.X * nXZ.X + nXZ.Z * nXZ.Z);
+            if (nl <= 1e-6f) return new Vec3(0.0, 0.0, 0.0);
+            nXZ = new Vec3(nXZ.X / nl, 0.0, nXZ.Z / nl);
+            float dot = (float)(v.X * nXZ.X + v.Z * nXZ.Z);
+            return new Vec3(v.X - dot * nXZ.X, 0.0, v.Z - dot * nXZ.Z);
         }
 
         // --- Ground ray helpers ---
@@ -331,6 +543,20 @@ namespace ConsoleGame.RayTracing.Scenes
             worldManager.LoadChunksAround(center);
         }
 
+        // Place camera at ground surface for given XZ before rendering begins.
+        public void PlaceCameraOnSurfaceXZ(double x, double z)
+        {
+            if (worldConfig == null) return;
+            double probeTop = MathF.Min(worldConfig.WorldHeight + 16.0f, MaxProbeHeight);
+            if (TrySampleGroundYFan(x, z, probeTop, probeTop + 8.0f, out double g0))
+                CameraPos = new Vec3(x, g0 + EyeHeight + GroundClearance, z);
+            else
+                CameraPos = new Vec3(x, worldConfig.WaterLevel + EyeHeight + 4.0f, z);
+            verticalVelocity = 0.0f;
+            isGrounded = true;
+            autoPlaced = true;
+        }
+
         public void ReloadFromExistingFile(string filename, Vec3 worldMinCorner, Vec3 voxelSize, Func<int, int, Material> materialLookup, int chunkSize = 32)
         {
             if (worldManager == null)
@@ -340,47 +566,68 @@ namespace ConsoleGame.RayTracing.Scenes
     }
     public static class VolumeScenes
     {
-        public static VolumeScene BuildMinecraftLike(string filename = "")
+        public static VolumeScene BuildMinecraftLike(string filename = "assets/Worlds/island.vg")
         {
+            int worldSize = 512;
+            int worldHeight = 256;
+            int chunkSize = 32;
+
+            int chunksX = worldSize / chunkSize;
+            int chunksY = worldHeight / chunkSize;
+            int chunksZ = worldSize / chunkSize;
+
             WorldConfig cfg = new WorldConfig(
-                chunkSize: 32,
-                chunksX: 16,
-                chunksY: 8,
-                chunksZ: 16,
-                viewDistanceChunks: 16,
-                worldMin: new Vec3(-100, 0, -100),
+                chunkSize: chunkSize,
+                chunksX: chunksX,
+                chunksY: chunksY,
+                chunksZ: chunksZ,
+                // Increase view distance so sun/moon shadow rays
+                // can actually find occluders within the loaded BVH.
+                // With 32-voxel chunks, 8 => ~256 units radius.
+                viewDistanceChunks: 8,
+                worldMin: new Vec3(-worldSize / 2, 0, -worldSize / 2),
                 voxelSize: new Vec3(1, 1, 1),
                 worldSeed: 0
             );
 
             VolumeScene scene = new VolumeScene();
             scene.DefaultCameraPos = new Vec3(0, 120, 0);
-            scene.Ambient = new AmbientLight(new Vec3(1, 1, 1), 0.25f);
-            scene.BackgroundTop = new Vec3(0.02, 0.02, 0.03);
-            scene.BackgroundBottom = new Vec3(0.01, 0.01, 0.01);
-            scene.Lights.Add(new PointLight(new Vec3(0.0, 500.0, 0.0), new Vec3(1.0, 1.0, 1.0), 400000.0f));
-            scene.Lights.Add(new PointLight(new Vec3(-10.0, 500.0, -10.0), new Vec3(1.0, 0.95, 0.9), 160000.0f));
+            scene.Ambient = new AmbientLight(new Vec3(1, 1, 1), 0.0f);
+            scene.BackgroundTop = new Vec3(0.30, 0.55, 0.95);
+            scene.BackgroundBottom = new Vec3(0.80, 0.90, 1.00);
+            // Day-night controller will manage sun/moon lights and sky
+            scene.AddEntity(new DayNightEntity(
+                cycleSeconds: 120.0f,
+                sunRadius: 2000.0f
+            ));
 
             var generator = new WorldGenerator();
             var manager = new WorldManager(scene, generator, cfg, VoxelMaterialPalette.MaterialLookup);
             scene.InitializeWorld(manager, cfg);
 
-            if (!string.IsNullOrEmpty(filename) && File.Exists(filename))
+            if (!string.IsNullOrEmpty(filename))
             {
+                if (!File.Exists(filename))
+                {
+                    manager.GenerateAndSaveWorld(filename);
+                }
                 scene.ReloadFromExistingFile(filename, cfg.WorldMin, cfg.VoxelSize, VoxelMaterialPalette.MaterialLookup, cfg.ChunkSize);
-            }
-            else if (!string.IsNullOrEmpty(filename))
-            {
-                manager.GenerateAndSaveWorld(filename);
-                scene.ReloadFromExistingFile(filename, cfg.WorldMin, cfg.VoxelSize, VoxelMaterialPalette.MaterialLookup, cfg.ChunkSize);
+                // Ensure the entire world is fully attached before camera/control
+                manager.EnsureAllChunksLoaded();
+                // Place camera on surface at default XZ (BVH is valid now)
+                scene.PlaceCameraOnSurfaceXZ(scene.DefaultCameraPos.X, scene.DefaultCameraPos.Z);
             }
             else
             {
                 scene.ClearLoadedVolumes();
-                scene.COC(scene.DefaultCameraPos);
+                // Synchronously generate and attach the entire world before control
+                manager.EnsureAllChunksLoaded();
+                // Place camera after world load
+                scene.PlaceCameraOnSurfaceXZ(scene.DefaultCameraPos.X, scene.DefaultCameraPos.Z);
             }
 
             return scene;
         }
+
     }
 }

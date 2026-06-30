@@ -96,9 +96,12 @@ public partial class RaytraceEntity : BaseComponent
         this.activeScene = GetOrBuildScene(this.sceneIndex);
         this.rtSuperSample = Math.Max(1, superSample);
 
-        this.activeScene.CameraPos = activeScene.DefaultCameraPos;
-        this.activeScene.Yaw = activeScene.DefaultYaw;
-        this.activeScene.Pitch = activeScene.DefaultPitch;
+        if (this.activeScene is not ConsoleGame.RayTracing.Scenes.VolumeScene)
+        {
+            this.activeScene.CameraPos = activeScene.DefaultCameraPos;
+            this.activeScene.Yaw = activeScene.DefaultYaw;
+            this.activeScene.Pitch = activeScene.DefaultPitch;
+        }
 
         this.terminal.AddResizedCallback(OnTerminalResized);
         int initW = Math.Max(1, Console.WindowWidth - 1);
@@ -125,9 +128,12 @@ public partial class RaytraceEntity : BaseComponent
         this.camSingleFrameAdvance = singleFrameAdvance;
         this.camForcedAspect = forcedAspect;
 
-        this.activeScene.CameraPos = activeScene.DefaultCameraPos;
-        this.activeScene.Yaw = activeScene.DefaultYaw;
-        this.activeScene.Pitch = activeScene.DefaultPitch;
+        if (this.activeScene is not ConsoleGame.RayTracing.Scenes.VolumeScene)
+        {
+            this.activeScene.CameraPos = activeScene.DefaultCameraPos;
+            this.activeScene.Yaw = activeScene.DefaultYaw;
+            this.activeScene.Pitch = activeScene.DefaultPitch;
+        }
 
         this.terminal.AddResizedCallback(OnTerminalResized);
         int initW = Math.Max(1, Console.WindowWidth - 1);
@@ -150,9 +156,12 @@ public partial class RaytraceEntity : BaseComponent
         this.activeScene = GetOrBuildScene(this.sceneIndex);
         this.rtSuperSample = Math.Max(1, superSample);
 
-        this.activeScene.CameraPos = activeScene.DefaultCameraPos;
-        this.activeScene.Yaw = activeScene.DefaultYaw;
-        this.activeScene.Pitch = activeScene.DefaultPitch;
+        if (this.activeScene is not ConsoleGame.RayTracing.Scenes.VolumeScene)
+        {
+            this.activeScene.CameraPos = activeScene.DefaultCameraPos;
+            this.activeScene.Yaw = activeScene.DefaultYaw;
+            this.activeScene.Pitch = activeScene.DefaultPitch;
+        }
 
         this.terminal.AddResizedCallback(OnTerminalResized);
         int initW = Math.Max(1, Console.WindowWidth - 1);

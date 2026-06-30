@@ -50,7 +50,7 @@ namespace ConsoleGame.RayTracing.Scenes
             switch (id)
             {
                 case WorldGenSettings.Blocks.Air: return (0, 0);
-                case WorldGenSettings.Blocks.Stone: return (1, 0);
+                case WorldGenSettings.Blocks.Stone: return (1, Clamp(meta, 0, 2));
                 case WorldGenSettings.Blocks.Dirt: return (2, 0);
                 case WorldGenSettings.Blocks.Grass: return (3, 0);
                 case WorldGenSettings.Blocks.Water: return (4, 0);
@@ -70,13 +70,19 @@ namespace ConsoleGame.RayTracing.Scenes
             switch (key.id)
             {
                 case 0: return PalMat(0);
-                case 1: return PalMat(8);
+                case 1:
+                    switch (key.meta)
+                    {
+                        case 0: return PalMat(8);  // gray
+                        case 1: return PalMat(7);  // light gray
+                        default: return PalMat(15); // white-ish (marble/chalk)
+                    }
                 case 2: return PalMat(6);
                 case 3: return PalMat(10);
                 case 4: return PalMat(9);   // water
                 case 5: return PalMat(14);
-                case 6: return PalMat(4);
-                case 7: return PalMat(2);
+                case 6: return PalMat(6); // wood: olive/brownish
+                case 7: return PalMat(2); // leaves: dark green (distinct from bright grass)
                 case 8: return PalMat(15);
                 case 9:
                     switch (key.meta)
